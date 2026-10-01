@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+perg_data.csv
+perg_strokes.csv
+
+.venv/
+venv/
+env/
