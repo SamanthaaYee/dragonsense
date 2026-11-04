@@ -1,29 +1,30 @@
 # Perg Logger
 
-ESP32 and Python tools for recording and analyzing the raw Hall-effect sensor
-signal from a Perg rowing machine flywheel.
+ESP32 firmware and Python tools for capturing a paddling ergometer's flywheel
+sensor signal, estimating RPM, and displaying Bluetooth telemetry.
 
-The ESP32 sketch samples the Hall sensor on GPIO 27 at 1 kHz and streams CSV
-rows over USB serial. The Python recorder saves those rows to `perg_data.csv`,
-and the analyzer detects pulses, estimates flywheel RPM, and attempts to
-summarize rowing strokes.
+## Project layout
 
-## Files
+```text
+firmware/
+  perg_logger/             Original 1 kHz USB raw-sample logger
+  perg_bt_logger/          1 kHz Bluetooth telemetry logger
+  perg_full_logger/        Combined 2 kHz USB + Bluetooth logger
+  perg_stat_display/       CYD Bluetooth display
+record_perg.py             USB sample and telemetry recorder
+analyze_perg.py            Offline waveform and stroke analysis
+requirements.txt          Python dependencies
+data/
+  examples/perg_data.csv   Original recording used for the example plot
+  sessions/anna/           Saved Anna raw samples and telemetry
+  sessions/misha/          Saved Misha raw samples and telemetry
+  live/                   Latest captures (local, ignored by Git)
+docs/images/              Original example analysis plot
+outputs/                  Generated analysis files (ignored by Git)
+```
 
-- `perg_logger.ino` - ESP32 sketch that samples the Hall sensor and streams
-  `time_us,adc_value`.
-- `record_perg.py` - serial logger that records the ESP32 stream to
-  `perg_data.csv`.
-- `analyze_perg.py` - analysis script that creates plots and stroke summaries.
-- [`perg_data.csv`](perg_data.csv) - raw sample recording included so the analysis
-  can be reproduced without connecting the hardware.
-- [`perg_analysis.png`](perg_analysis.png) - example analysis plot from that recording.
-
-## Wiring
-
-- Perg 3.5 mm left/signal terminal to ESP32 GPIO 27 through a 10 kOhm resistor.
-- Perg 3.5 mm ground terminal to ESP32 ground.
-- The right terminal is not used.
+Each firmware folder contains a matching `.ino` file so Arduino IDE can open
+and compile the sketches separately. Open only the sketch for the board's role.
 
 ## Setup
 
@@ -31,67 +32,119 @@ summarize rowing strokes.
 python3 -m pip install -r requirements.txt
 ```
 
-To analyze the included example without hardware, run:
+For the CYD display, install **TFT_eSPI by Bodmer** in Arduino IDE. Configure
+the library's `User_Setup.h` with the ILI9341 driver and pin definitions shown
+in `firmware/perg_stat_display/perg_stat_display.ino`. Enable `LOAD_GLCD`,
+`LOAD_FONT2`, `LOAD_FONT4`, and `LOAD_FONT7`. Definitions in the sketch alone
+do not configure the separately compiled library. Library updates may reset
+this setup.
 
-```bash
-python3 analyze_perg.py perg_data.csv
-```
+## Record a session
 
-To capture a new session, upload `perg_logger.ino` to the ESP32, then record data
-(the recorder overwrites `perg_data.csv`, so copy the example first if needed):
+Upload `firmware/perg_full_logger/perg_full_logger.ino` to the sensor ESP32
+and `firmware/perg_stat_display/perg_stat_display.ino` to the CYD. The logger
+is configured for 2 kHz raw sampling and 10 telemetry updates per second.
+Its USB baud rate is 460800, the recorder's default:
 
 ```bash
 python3 record_perg.py
 ```
 
-If auto-detection does not find the ESP32, pass the serial port explicitly:
+With multiple boards connected, specify the sensor logger's port:
 
 ```bash
-python3 record_perg.py /dev/cu.usbserial-210
+python3 record_perg.py /dev/cu.usbserial-10
 ```
 
-Analyze the captured CSV:
+For the original USB-only `firmware/perg_logger/perg_logger.ino` sketch,
+which samples at 1 kHz, select its matching baud rate:
+
+```bash
+python3 record_perg.py /dev/cu.usbserial-210 --baud 921600
+```
+
+The recorder validates incoming samples before opening its output files.
+It saves raw samples to `data/live/perg_data.csv` and mirrored telemetry to
+`data/live/perg_telemetry.csv`, relative to the project directory regardless
+of the terminal's working directory. Both files are overwritten when a valid
+recording starts. Copy captures into a named folder under `data/sessions/`
+to preserve them before the next recording. Stop with Ctrl+C.
+
+Every received sample is saved; the terminal shows every 100th raw sample.
+The USB-only sketch produces a telemetry file containing just the header.
+The full logger records generated telemetry even when Bluetooth is disconnected;
+these records do not confirm delivery to the display. Bluetooth connection
+attempts and writes run in a separate task.
+
+At 460800 baud, 8N1 serial carries at most 46,080 bytes/s. Raw CSV at 2 kHz
+needs up to 34,000 bytes/s plus telemetry; 10 kHz CSV would need up to
+170,000 bytes/s and requires a different format or faster reliable link.
+
+## Analyze a recording
+
+Analyze the original example without hardware:
+
+```bash
+python3 analyze_perg.py data/examples/perg_data.csv
+```
+
+Analyze the latest capture or a saved session:
 
 ```bash
 python3 analyze_perg.py
+python3 analyze_perg.py data/sessions/misha/perg_data.csv
 ```
 
-## What the CSV contains
+Plots are written to `outputs/perg_analysis.png`. If strokes are detected,
+their summaries are written to `outputs/perg_strokes.csv`. Each run overwrites
+the plot; a run with no strokes does not replace a previous stroke summary.
 
-The included `perg_data.csv` is a raw sensor recording, with one sample per row:
+The offline analyzer uses a fixed threshold designed for the original
+zero-baseline, clipped waveform. It still needs adaptation for biased
+recordings; its results on those recordings should not be used as validated
+RPM or stroke measurements. The Bluetooth firmware uses adaptive detection.
+
+## Data format and interpretation
+
+Raw sample CSVs contain:
 
 | Column | Meaning |
 | --- | --- |
-| `time_us` | ESP32 timestamp in microseconds since boot, not a date or wall-clock time. |
-| `adc_value` | Raw 12-bit ADC reading (0–4095), not a calibrated voltage or force. |
+| `time_us` | ESP32 microseconds since boot, not wall-clock time |
+| `adc_value` | Raw 12-bit ADC reading (0–4095), not calibrated voltage or force |
 
-As the flywheel turns, magnets pass the sensor and produce pulses. The analyzer
-finds rising threshold crossings, measures the time between pulses, and uses
-`RPM = 60 / (8 × pulse_interval_seconds)`, assuming eight magnets per revolution.
-With enough valid intervals, it also estimates acceleration, stroke rate, and
-drive/recovery timing from changes in flywheel speed.
+Telemetry CSVs contain
+`time_us,rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts`.
+Pace is seconds per 500 m; period is the interval between sensor pulses.
+The display also shows peak watts over the last 1.25 seconds.
 
-After filtering, this example contains 29,675 samples over about 35.3 seconds,
-with 590 detected pulses and 2,816 sampling gaps longer than 3 ms. The raw file
-also contains an initial serial fragment. The analyzer
-filters invalid samples and rejects pulse intervals containing gaps longer than
-3 ms. It is an early signal-capture example; it does not provide validated
-rowing performance measurements.
+RPM conversion assumes eight pulses per flywheel revolution:
+`RPM = 60 / (8 × pulse_interval_seconds)`. Confirm this against the hardware.
+Power, pace, and distance use an adjustable drag model and need calibration
+against the Perg display. No calibration from the video comparisons has
+been applied to the firmware.
 
-## Example Output
+Anna's and Misha's session folders preserve the supplied files without
+altering their values. The latest local raw capture duplicates Misha's saved
+raw recording. The original example has 29,675 samples after filtering over
+about 35.3 seconds, 590 detected pulses, and 2,816 sampling gaps longer than
+3 ms. Those statistics describe the original example, not the newer sessions.
 
-![Perg Hall sensor waveform and analysis result](perg_analysis.png)
+## Sensor wiring
 
-Caption: Raw Perg Hall-effect sensor recording. The top panel shows ADC pulses
-from flywheel magnets; red tick marks show detected pulse crossings. The lower
-RPM, acceleration, and stroke-rate panels are empty for this recording because
-the analyzer found too few valid pulse intervals after checking sampling gaps.
+The original unconditioned input connects Perg signal (3.5 mm left terminal)
+through 10 kOhm to GPIO 27, and Perg ground to ESP32 ground; the right terminal
+is unused. Negative voltages are clipped by the ADC. Later work uses a biased
+signal; the newer firmware's voltage conversion assumes a baseline of 1870
+ADC counts and an approximate 3.6 V scale, which still require calibration.
+Check the actual conditioning circuit before relying on firmware wiring comments.
 
-## Notes
+GPIO 27 is ADC2. If Wi-Fi is added, move the analog input to a suitable ADC1
+pin and update the sketch.
 
-- The current RPM conversion assumes 8 magnets on the flywheel.
-- The ESP32 ADC clips negative voltage, so this captures the positive half of
-  the Hall signal. A DC-bias circuit would improve future measurements.
-- The example `perg_data.csv` and `perg_analysis.png` are tracked in this repository.
-- `perg_strokes.csv` is generated only when strokes are detected and is ignored by git.
-- Both Python scripts write their output files in the current working directory.
+## Original example output
+
+![Original Hall waveform analysis](docs/images/perg_analysis.png)
+
+The original example's lower panels are empty because too few pulse intervals
+survive the sampling-gap checks. It is an early signal-capture example.

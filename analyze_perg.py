@@ -11,20 +11,24 @@ From the raw Hall sensor waveform (perg_data.csv) this computes:
   7. Drive/recovery   - time of each phase and their ratio
 
 Usage:
-    python3 analyze_perg.py                  # analyzes perg_data.csv
+    python3 analyze_perg.py                  # analyzes data/live/perg_data.csv
     python3 analyze_perg.py other_file.csv
 
 Outputs:
-    perg_analysis.png   - plots of waveform, RPM, acceleration, stroke rate
-    perg_strokes.csv    - one row per detected stroke
+    outputs/perg_analysis.png   - plots of waveform, RPM, acceleration, stroke rate
+    outputs/perg_strokes.csv    - one row per detected stroke
 """
 
 import csv
+from pathlib import Path
 import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import find_peaks
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
 MAGNETS = 8
 
@@ -152,7 +156,7 @@ def detect_strokes(t_s, rpm_s):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "perg_data.csv"
+    path = sys.argv[1] if len(sys.argv) > 1 else PROJECT_ROOT / "data" / "live" / "perg_data.csv"
     t_us, adc = load(path)
     t0 = t_us[0]
     t_s = (t_us - t0) / 1e6
@@ -215,11 +219,12 @@ def main():
 
     ax_rate.set_xlabel("Time (s)")
     fig.tight_layout()
-    fig.savefig("perg_analysis.png", dpi=120)
-    print("Saved plots:   perg_analysis.png")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(OUTPUT_DIR / "perg_analysis.png", dpi=120)
+    print(f"Saved plots:   {OUTPUT_DIR / 'perg_analysis.png'}")
 
     if strokes:
-        with open("perg_strokes.csv", "w", newline="") as f:
+        with open(OUTPUT_DIR / "perg_strokes.csv", "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=strokes[0].keys())
             writer.writeheader()
             writer.writerows(strokes)
@@ -227,7 +232,7 @@ def main():
         ratios = [s["recovery_to_drive"] for s in strokes if s["recovery_to_drive"]]
         print(f"Strokes:       {len(strokes)}, median rate {np.median(rates):.0f} spm, "
               f"median recovery:drive {np.median(ratios):.2f}")
-        print("Saved strokes: perg_strokes.csv")
+        print(f"Saved strokes: {OUTPUT_DIR / 'perg_strokes.csv'}")
     else:
         print("Strokes:       none detected")
 
