@@ -1,0 +1,11 @@
+{
+  "files.associations": {
+    "*.ino": "cpp"
+  },
+  "files.exclude": {
+    ".vscode/arduino-build": true
+  },
+  "search.exclude": {
+    ".vscode/arduino-build": true
+  }
+}

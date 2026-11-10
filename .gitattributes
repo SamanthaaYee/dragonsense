@@ -1,0 +1,4 @@
+# Preserve captured/generated CSV bytes, including the writer's CRLF endings.
+*.csv -text whitespace=cr-at-eol
+# Serial progress logs contain carriage-return updates; preserve the evidence.
+data/synthetic/**/replay.log -text -whitespace

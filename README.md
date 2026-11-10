@@ -1,7 +1,12 @@
 # Perg Logger
 
 ESP32 firmware and Python tools for capturing a paddling ergometer's flywheel
-sensor signal, estimating RPM, and displaying Bluetooth telemetry.
+sensor signal, estimating RPM, displaying Bluetooth telemetry, and replaying
+recorded or synthetic sensor waveforms into the original monitor.
+
+**Calibration remains experimental.** The monitor has not yet accepted a
+replayed drag-59 calibration. See the [November 9 progress report](docs/experiments/2026-11-09.md)
+for observed results, archived data, and known limitations.
 
 ## Project layout
 
@@ -10,15 +15,22 @@ firmware/
   perg_logger/             Original 1 kHz USB raw-sample logger
   perg_bt_logger/          1 kHz Bluetooth telemetry logger
   perg_full_logger/        Combined 2 kHz USB + Bluetooth logger
-  perg_stat_display/       CYD Bluetooth display
+  perg_stat_display/       CYD touchscreen display with Start/Stop
+  perg_signal_player/      DAC waveform player (separate board role)
 record_perg.py             USB sample and telemetry recorder
 analyze_perg.py            Offline waveform and stroke analysis
+replay_lin_probe.py        Replay, synthetic trials, optional LIN decoding
+perg_signal.py             CSV validation and timestamp-based resampling
+perg_synthetic.py          Synthetic coast-down model and generation
+tests/                    Hardware-free workflow tests
 requirements.txt          Python dependencies
 data/
   examples/perg_data.csv   Original recording used for the example plot
   sessions/anna/           Saved Anna raw samples and telemetry
   sessions/misha/          Saved Misha raw samples and telemetry
-  live/                   Latest captures (local, ignored by Git)
+  sessions/2026-11-09/     Three archived recordings and checksum manifest
+  synthetic/2026-11-09/    Two generated trials with explicit outcome records
+  live/                   Named captures (local, ignored by Git)
 docs/images/              Original example analysis plot
 outputs/                  Generated analysis files (ignored by Git)
 ```
@@ -63,12 +75,62 @@ which samples at 1 kHz, select its matching baud rate:
 python3 record_perg.py /dev/cu.usbserial-210 --baud 921600
 ```
 
-The recorder validates incoming samples before opening its output files.
-It saves raw samples to `data/live/perg_data.csv` and mirrored telemetry to
-`data/live/perg_telemetry.csv`, relative to the project directory regardless
-of the terminal's working directory. Both files are overwritten when a valid
-recording starts. Copy captures into a named folder under `data/sessions/`
-to preserve them before the next recording. Stop with Ctrl+C.
+The recorder asks for a recording name before connecting, for example
+`calibration_01`. It saves raw samples to `data/live/calibration_01/perg_data.csv`
+and mirrored telemetry to `data/live/calibration_01/perg_telemetry.csv`, relative
+to the project directory regardless of the terminal's working directory.
+Existing recording folders are refused so previous captures are not overwritten.
+Files are created only after valid samples arrive. Stop with Ctrl+C.
+
+You can also supply the name directly:
+
+```bash
+python3 record_perg.py --name calibration_01
+```
+
+### Use the LCD Start/Stop button
+
+Upload **both** updated sketches: `perg_full_logger` to the sensor ESP32 and
+`perg_stat_display` to the CYD LCD. The display uses the XPT2046 resistive touch
+controller on the ESP32-2432S028R CYD (CLK 25, MISO 39, MOSI 32, CS 33, IRQ 36).
+Install **XPT2046_Touchscreen by Paul Stoffregen** alongside TFT_eSPI; the touch
+bus is separate from the display bus. The pinout follows the
+[CYD board reference](https://github.com/caseynielson/esp_28_lcd_exp), using the
+[touch library's custom SPI support](https://github.com/PaulStoffregen/XPT2046_Touchscreen).
+
+On the LCD's first boot, press and release each of the two calibration crosses.
+The calibration is saved. Hold a finger on the screen while resetting the LCD
+to repeat calibration. Keep TFT_eSPI's existing display configuration.
+
+Start/Stop is in the top-right corner. It is disabled until the updated logger
+reports its session state. Start resets elapsed time and distance, then begins
+counting. Stop freezes elapsed time and distance; RPM, pace, voltage, and watts
+remain live. The button waits for the logger's acknowledgment before changing
+state. Movement or noise alone never starts the timer. Each Start begins a new
+session, rather than resuming the previous one. Without a computer the button
+still controls the LCD session.
+
+For the button to control the saved capture as well, run:
+
+```bash
+python3 record_perg.py /dev/cu.usbserial-10 --start-on-button
+```
+
+Enter a fresh recording name. Wait for `Ready: tap START on the LCD`, then tap
+Start and paddle. Tap Stop to finish: the recorder closes both files and exits.
+Run the command again with a new name before the next capture. No timed reset
+button presses are needed. Starting the recorder in this mode arms a new session
+and clears the timer/distance, so run it before paddling. If you cancel with
+Ctrl+C, files close but the LCD session continues until you tap Stop.
+
+Both CSV `time_us` columns are relative to the logger's receipt of the Start
+command. Bluetooth adds a small delay after your tap. The previous
+`--start-on-motion` flag is accepted as an alias, but now also waits for the
+button; automatic motion triggering has been replaced.
+
+Without the flag the recorder still captures idle samples and uses boot-relative
+timestamps, useful for calibration. LCD Start/Stop controls the timer but does
+not stop that continuous USB capture; use Ctrl+C to finish it.
 
 Every received sample is saved; the terminal shows every 100th raw sample.
 The USB-only sketch produces a telemetry file containing just the header.
@@ -80,6 +142,81 @@ At 460800 baud, 8N1 serial carries at most 46,080 bytes/s. Raw CSV at 2 kHz
 needs up to 34,000 bytes/s plus telemetry; 10 kHz CSV would need up to
 170,000 bytes/s and requires a different format or faster reliable link.
 
+## Replay a capture into the original Perg monitor
+
+`firmware/perg_signal_player/perg_signal_player.ino` is separate firmware for a replay
+ESP32, not the LCD. It generates a waveform on GPIO 25 (DAC1) for the monitor's
+SPD input through the replay coupling circuit. Uploading it to the sensor
+ESP32 replaces its logger firmware. Confirm the physical replay circuit and
+which USB port belongs to the player before running output.
+
+The [replay wiring notes](docs/replay_wiring.md) document the existing circuit
+assumptions and unverified electrical details. The sensor recording circuit
+is not the replay circuit. Optional LIN sniffer firmware is not included.
+
+Validate a capture without connecting to hardware:
+
+```bash
+python3 replay_lin_probe.py run auto --csv "data/sessions/2026-11-09/68kg_drag59_test2/perg_data.csv" --once --dry-run
+```
+
+The Python tool resamples by timestamps to the player's 1 kHz DAC clock, so
+2 kHz logger captures retain their duration. Gaps over 2 ms hold the previous
+value. The ADC-to-DAC conversion uses an approximate bias/gain, not a measured
+calibration of the complete replay circuit.
+
+Once the replay hardware is connected and the player sketch uploaded, replace
+`PLAYER_PORT` with its USB port and run:
+
+```bash
+python3 replay_lin_probe.py run PLAYER_PORT --csv "data/sessions/2026-11-09/68kg_drag59_test2/perg_data.csv" --once
+```
+
+No LIN sniffer is needed for playback alone. `--once` waits for the queued
+signal to finish, then stops the DAC and closes USB. Ctrl+C stops early.
+Without `--once`, playback loops until Ctrl+C, or for `--seconds N` if given.
+
+### Synthetic calibration experiments
+
+Generate a clean spin-up, hold, complete coast-down, and five seconds
+at rest. The example below measures the raw waveform's 700-to-300 RPM interval
+from the recording the user identified as drag 59. It does not use the logger's
+calculated RPM, watts, or fixed drag constant.
+
+```bash
+python3 replay_lin_probe.py synthesize --reference "data/sessions/2026-11-09/68kg_drag59/perg_data.csv" --reference-drag 59 --target-drag 59 --peak-rpm 840 --hold-seconds 5 --out outputs/synthetic_drag59_trial03
+python3 replay_lin_probe.py run auto --csv outputs/synthetic_drag59_trial03/perg_data.csv --once --dry-run
+```
+
+Output folders must be new. Each contains `perg_data.csv` (synthetic ADC-format
+signal at 2 kHz), `profile.csv` (intended RPM and stages at 100 Hz), and
+`synthetic.json` (parameters, reference, and limitations). The replay tool
+converts the signal to the player's existing 1 kHz clock.
+
+With the existing replay circuit connected and the original monitor in drag
+calibration mode, run once on the actual player port:
+
+```bash
+python3 replay_lin_probe.py run PLAYER_PORT --csv outputs/synthetic_drag59_trial03/perg_data.csv --once
+```
+
+Check that the monitor itself displays more than 700 RPM. Increase the peak
+or hold duration if its display remains below that threshold.
+
+The model is `dRPM/dt = -(a*RPM^2 + b)`, with a fixed illustrative bearing term
+`b = 1 RPM/s`. It fits `a` to the reference coast interval, then scales `a` by
+requested/reference drag. Higher requested values therefore decelerate faster.
+This is a test hypothesis, not the proprietary monitor's verified drag formula.
+Amplitude is constant through the calibration range and fades below 100 RPM.
+The eight-pulses-per-revolution assumption is unchanged.
+
+Record the number only when the monitor stops flashing and accepts calibration.
+A number that remains flashing is not an accepted measurement and must not be
+used as a calibration reference. An accepted synthetic run can become the next
+`--reference`, with its observed number as `--reference-drag`, to refine another
+target experimentally. Synthetic trials do not establish the actual machine's
+physical drag, and the generated target number is never guaranteed.
+
 ## Analyze a recording
 
 Analyze the original example without hardware:
@@ -88,10 +225,10 @@ Analyze the original example without hardware:
 python3 analyze_perg.py data/examples/perg_data.csv
 ```
 
-Analyze the latest capture or a saved session:
+Analyze a named capture or a saved session:
 
 ```bash
-python3 analyze_perg.py
+python3 analyze_perg.py data/live/calibration_01/perg_data.csv
 python3 analyze_perg.py data/sessions/misha/perg_data.csv
 ```
 
@@ -110,7 +247,7 @@ Raw sample CSVs contain:
 
 | Column | Meaning |
 | --- | --- |
-| `time_us` | ESP32 microseconds since boot, not wall-clock time |
+| `time_us` | ESP32 microseconds since boot, or since LCD Start with `--start-on-button`; not wall-clock time |
 | `adc_value` | Raw 12-bit ADC reading (0–4095), not calibrated voltage or force |
 
 Telemetry CSVs contain
@@ -148,3 +285,20 @@ pin and update the sketch.
 
 The original example's lower panels are empty because too few pulse intervals
 survive the sampling-gap checks. It is an early signal-capture example.
+
+## Development checks
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m compileall -q record_perg.py replay_lin_probe.py perg_signal.py perg_synthetic.py
+```
+
+Compile changed firmware with Arduino IDE or Arduino CLI (`esp32:esp32:esp32`).
+The display needs TFT_eSPI and XPT2046_Touchscreen. A successful build does not
+validate the analog replay circuit or the monitor's drag algorithm. This cleanup
+does not upload firmware or run signals on connected hardware.
+
+VS Code associates `.ino` files with C++. Machine-specific include paths,
+compilation databases, and Arduino build caches remain local and ignored by Git.
+If the editor reports missing ESP32 headers, use your installed Arduino build
+configuration; Arduino IDE compilation is independent of those editor warnings.

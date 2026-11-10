@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-09",
+  "timezone": "America/Toronto",
+  "recordings": [
+    {
+      "folder": "68kg_drag59",
+      "original_session_name": "68kg59Drag Nov9",
+      "start_mode": "motion-start",
+      "drag_label_is_user_supplied": true,
+      "files": {
+        "perg_data.csv": {
+          "sha256": "74a4dd1cc6e7fd11626c0c210de614f1e2e5ce3fa36a28515dcd9159c3e00318",
+          "rows": 72022,
+          "first_time_us": 0,
+          "last_time_us": 36032400,
+          "duration_seconds": 36.0324,
+          "backward_timestamps": 0,
+          "max_gap_us": 19980,
+          "gaps_over_1500_us": 2
+        },
+        "perg_telemetry.csv": {
+          "sha256": "fc0a226251936e97238b8596fc34781beff282bf329d3827446fb94ce113802f",
+          "rows": 360,
+          "first_time_us": 58767,
+          "last_time_us": 35958767,
+          "duration_seconds": 35.9,
+          "backward_timestamps": 0
+        }
+      }
+    },
+    {
+      "folder": "68kg_drag59_test2",
+      "original_session_name": "68kg59DTest2nov9",
+      "start_mode": "lcd-button",
+      "drag_label_is_user_supplied": true,
+      "files": {
+        "perg_data.csv": {
+          "sha256": "e36eef0e9fff77b29b1b16a5d6f56d751f7e4492fb2fc494f72ab0c871109c90",
+          "rows": 43500,
+          "first_time_us": 318,
+          "last_time_us": 21749567,
+          "duration_seconds": 21.749249,
+          "backward_timestamps": 0,
+          "max_gap_us": 619,
+          "gaps_over_1500_us": 0
+        },
+        "perg_telemetry.csv": {
+          "sha256": "db7f19706f5b32e5ac584ed252d69d535904aa13ddda9049d102030cc6e38fcf",
+          "rows": 221,
+          "first_time_us": 0,
+          "last_time_us": 21749989,
+          "duration_seconds": 21.749989,
+          "backward_timestamps": 0
+        }
+      }
+    },
+    {
+      "folder": "68kg_test3",
+      "original_session_name": "68kgtest3nov9",
+      "start_mode": "lcd-button",
+      "drag_label_is_user_supplied": true,
+      "files": {
+        "perg_data.csv": {
+          "sha256": "e12b1f98be94bc33c90b0b0d36622c2950df801c39fcffaac5ad72f4a16e4ac4",
+          "rows": 142540,
+          "first_time_us": 319,
+          "last_time_us": 71269757,
+          "duration_seconds": 71.269438,
+          "backward_timestamps": 0,
+          "max_gap_us": 515,
+          "gaps_over_1500_us": 0
+        },
+        "perg_telemetry.csv": {
+          "sha256": "35371eaddbf98afb1876fb545ffebd59e07af7d15b7a95dda8aadab3a8f38c08",
+          "rows": 716,
+          "first_time_us": 0,
+          "last_time_us": 71270005,
+          "duration_seconds": 71.270005,
+          "backward_timestamps": 0
+        }
+      }
+    }
+  ]
+}

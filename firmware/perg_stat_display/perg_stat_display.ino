@@ -18,8 +18,8 @@
  * boots, because the logger retries connecting until it succeeds.
  *
  * Display pin definitions are the working ones from the previous WiFi/HTTP
- * version of this sketch. Touch is not needed here and was removed to save
- * memory alongside Bluetooth Classic.
+ * version of this sketch. XPT2046 touch uses the CYD's separate SPI bus.
+ * One Start/Stop button controls the updated full logger over Bluetooth.
  */
 
 // ---------------- TFT_eSPI user setup ----------------
@@ -38,9 +38,21 @@
 #include <TFT_eSPI.h>
 
 #include "BluetoothSerial.h"
+#include <SPI.h>
+#include <XPT2046_Touchscreen.h>
+#include <Preferences.h>
 
 BluetoothSerial SerialBT = BluetoothSerial();
 TFT_eSPI tft = TFT_eSPI();
+// TFT_eSPI defaults to VSPI even with the CYD's GPIO 12/13/14 pins.
+// Always give touch the OTHER hardware bus so it cannot reroute the TFT pins.
+#ifdef USE_HSPI_PORT
+SPIClass touchSPI(VSPI);
+#else
+SPIClass touchSPI(HSPI);
+#endif
+XPT2046_Touchscreen touch(33, 36); // CS, IRQ; CLK=25, MISO=39, MOSI=32
+int16_t touchCal[4]; // raw coordinates at screen (20,20) and (300,220)
 
 // ---------------- Colors ----------------
 #define COL_BG    TFT_BLACK
@@ -89,13 +101,88 @@ int wattsWinIdx = 0;
 // Link-state tracking: true once the logger has connected (so a lost link can
 // trigger the "Waiting..." banner redraw exactly once).
 bool wasConnected = false;
+bool sessionRunning = false;
+bool sessionKnown = false;
+bool commandPending = false;
+bool requestedRunning = false;
+unsigned long commandSentMs = 0;
+const int BUTTON_X = 208, BUTTON_Y = 2, BUTTON_W = 108, BUTTON_H = 34;
+
+void drawButton() {
+  uint16_t color = !sessionKnown ? COL_DIM : sessionRunning ? TFT_RED : TFT_DARKGREEN;
+  tft.fillRoundRect(BUTTON_X, BUTTON_Y, BUTTON_W, BUTTON_H, 6, color);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, color);
+  tft.drawString(!sessionKnown ? "CONNECTING" : commandPending ? "WAIT..." :
+                 sessionRunning ? "STOP" : "START",
+                 BUTTON_X + BUTTON_W / 2, BUTTON_Y + BUTTON_H / 2, 2);
+}
+
+// Two targets also handle reversed axes after the display is rotated.
+void calibrateTouch() {
+  for (;;) {
+    for (int i = 0; i < 2; i++) {
+      tft.fillScreen(COL_BG);
+      tft.setTextColor(COL_TEXT);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("Touch calibration", 160, 95, 4);
+      tft.drawString("Press and release the cross", 160, 125, 2);
+      int x = i == 0 ? 20 : 300, y = i == 0 ? 20 : 220;
+      tft.drawLine(x - 10, y, x + 10, y, TFT_YELLOW);
+      tft.drawLine(x, y - 10, x, y + 10, TFT_YELLOW);
+      while (touch.touched()) delay(20);
+      long sumX = 0, sumY = 0;
+      int count = 0;
+      while (count < 3) {
+        sumX = sumY = count = 0;
+        while (!touch.touched()) delay(20);
+        while (touch.touched()) {
+          TS_Point p = touch.getPoint();
+          sumX += p.x; sumY += p.y; count++;
+          delay(20);
+        }
+      }
+      touchCal[i * 2] = sumX / count;
+      touchCal[i * 2 + 1] = sumY / count;
+      delay(200);
+    }
+    if (abs(touchCal[2] - touchCal[0]) > 500 &&
+        abs(touchCal[3] - touchCal[1]) > 500) break;
+  }
+  Preferences prefs;
+  prefs.begin("perg-touch", false);
+  prefs.putBytes("corners", touchCal, sizeof(touchCal));
+  prefs.end();
+}
+
+void pollTouch() {
+  static bool held = false;
+  static unsigned long pressedMs = 0;
+  bool down = touch.touched();
+  if (!down) { held = false; pressedMs = 0; return; }
+  if (held) return;
+  if (pressedMs == 0) pressedMs = millis();
+  if (millis() - pressedMs < 60) return;
+  held = true; // one command per physical press, including a long hold
+  TS_Point p = touch.getPoint();
+  int x = map(p.x, touchCal[0], touchCal[2], 20, 300);
+  int y = map(p.y, touchCal[1], touchCal[3], 20, 220);
+  if (!sessionKnown || commandPending || x < BUTTON_X || x >= BUTTON_X + BUTTON_W ||
+      y < BUTTON_Y || y >= BUTTON_Y + BUTTON_H) return;
+  requestedRunning = !sessionRunning;
+  commandPending = true;
+  commandSentMs = millis();
+  SerialBT.print(requestedRunning ? "START\n" : "STOP\n");
+  drawButton(); // show WAIT until the logger confirms the authoritative state
+}
 
 void drawStatic() {
   tft.fillScreen(COL_BG);
 
   tft.setTextColor(COL_DIM);
-  tft.setTextDatum(TC_DATUM);
-  tft.drawString("PERG MONITOR", tft.width() / 2, TITLE_Y, 4);
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString("PERG", 20, TITLE_Y, 4);
+  drawButton();
 
   tft.setTextColor(COL_TEXT);
   tft.setTextDatum(TL_DATUM);
@@ -139,6 +226,16 @@ void setup() {
 
   tft.init();
   tft.setRotation(3); // landscape, 180° from rotation 1 (upside down)
+  touchSPI.begin(25, 39, 32, 33);
+  touch.begin(touchSPI);
+  touch.setRotation(3);
+  Preferences prefs;
+  prefs.begin("perg-touch", true);
+  bool calibrated = prefs.getBytes("corners", touchCal, sizeof(touchCal)) == sizeof(touchCal);
+  prefs.end();
+  // Hold the touchscreen during reset to repeat calibration.
+  delay(300);
+  if (!calibrated || touch.touched()) calibrateTouch();
 
   drawStatic();
   tft.setTextColor(COL_TEXT);
@@ -151,28 +248,17 @@ void setup() {
   Serial.println(SerialBT.getBtAddressString()); // A4:F0:0F:8D:32:7E
 }
 
-void loop() {
-  if (!SerialBT.hasClient()) {
-    // Show the waiting banner whenever the link is down.
-    if (wasConnected) { // just lost the link -> redraw once
-      wasConnected = false;
-      drawStatic();
-      tft.setTextColor(COL_TEXT);
-      tft.setTextDatum(MC_DATUM);
-      tft.drawString("Waiting for logger...", tft.width() / 2,
-                     tft.height() / 2, 2);
-    }
+void handleLine() {
+  int running;
+  if (sscanf(buf, "session_state,%d", &running) == 1) {
+    bool changed = !sessionKnown || sessionRunning != (running == 1);
+    sessionRunning = running == 1;
+    sessionKnown = true;
+    if (changed && sessionRunning) wattsWinCount = wattsWinIdx = 0;
+    if (commandPending && sessionRunning == requestedRunning) commandPending = false;
+    drawButton();
     return;
   }
-  wasConnected = true;
-
-  // Redraw for each incoming update: the reader sends every 100 ms.
-  // Read one telemetry line:
-  //   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
-  if (!SerialBT.available()) return;
-  int n = SerialBT.readBytesUntil('\n', buf, sizeof(buf) - 1);
-  if (n <= 0) return;
-  buf[n] = '\0';
 
   float rpm, paceS, distM, volt, periodMs, elapsedS, watts;
   if (sscanf(buf, "%f,%f,%f,%f,%f,%f,%f",
@@ -232,7 +318,7 @@ void loop() {
   }
   drawValueAt(PERIOD_X, PERIOD_Y, PERIOD_W, text);
 
-  // Elapsed time since the logger booted (mm:ss)
+  // Session elapsed time supplied by the logger (mm:ss)
   int emin = (int)(elapsedS / 60.0f);
   int esec = (int)(elapsedS - 60.0f * emin);
   snprintf(text, sizeof(text), "%d:%02d", emin, esec);
@@ -249,4 +335,39 @@ void loop() {
   // Hall voltage, bottom right, 3 decimals
   snprintf(text, sizeof(text), "%.3f V", volt);
   drawValueRight(VOLT_ALIGN_X, VOLT_ALIGN_Y, VOLT_ERASE_W, text);
+}
+
+void loop() {
+  static size_t used = 0;
+  static bool overflow = false;
+  if (!SerialBT.hasClient()) {
+    if (wasConnected) {
+      wasConnected = sessionKnown = commandPending = false;
+      used = 0; overflow = false;
+      drawStatic();
+      tft.setTextColor(COL_TEXT);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString("Waiting for logger...", 160, 120, 2);
+    }
+    return;
+  }
+  if (!wasConnected) drawStatic(); // clear the waiting banner on reconnect
+  wasConnected = true;
+  pollTouch();
+  // Bound each read pass so partial Bluetooth lines cannot block touch input.
+  for (int n = 0; n < 128 && SerialBT.available(); n++) {
+    char c = SerialBT.read();
+    if (c == '\n') {
+      buf[used] = '\0';
+      if (!overflow && used) handleLine();
+      used = 0; overflow = false;
+    } else if (c != '\r') {
+      if (used < sizeof(buf) - 1) buf[used++] = c;
+      else overflow = true;
+    }
+  }
+  if (commandPending && millis() - commandSentMs > 1000) {
+    SerialBT.print(requestedRunning ? "START\n" : "STOP\n");
+    commandSentMs = millis();
+  }
 }

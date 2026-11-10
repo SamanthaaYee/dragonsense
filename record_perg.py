@@ -2,9 +2,9 @@
 Perg Hall sensor recorder.
 
 Reads CSV lines ("time_us,adc_value") streamed by perg_logger.ino or
-perg_full_logger.ino and saves them to data/live/perg_data.csv until Ctrl+C.
+perg_full_logger.ino and saves them to data/live/NAME/perg_data.csv until Ctrl+C.
 The full logger also mirrors its Bluetooth telemetry over USB. Tagged
-telemetry lines are saved to data/live/perg_telemetry.csv with the ESP32 timestamp,
+telemetry lines are saved to data/live/NAME/perg_telemetry.csv with the ESP32 timestamp,
 RPM, pace, distance, Hall voltage, pulse period, elapsed time, and watts.
 
 Each row is one ADC sample of the Hall sensor voltage on GPIO 27, sampled
@@ -17,6 +17,8 @@ flywheel magnet passing the sensor makes one pulse, so for later analysis:
 Usage:
     python3 record_perg.py                 # auto-detect the ESP32 port
     python3 record_perg.py /dev/cu.usbserial-210
+    python3 record_perg.py --name calibration_01
+    python3 record_perg.py --start-on-button
     python3 record_perg.py /dev/cu.usbserial-10 --baud 921600  # original sketch
 
 Requires pyserial:  python3 -m pip install pyserial
@@ -26,9 +28,9 @@ Requires pyserial:  python3 -m pip install pyserial
 import argparse
 import csv
 import math
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 import serial
 from serial.tools import list_ports
@@ -39,11 +41,15 @@ CONNECT_TIMEOUT_S = 8
 MAX_LINE_BYTES = 128
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "live"
-FILENAME = OUTPUT_DIR / "perg_data.csv"
-TELEMETRY_FILENAME = OUTPUT_DIR / "perg_telemetry.csv"
 TELEMETRY_COLUMNS = [
-    "time_us", "rpm", "pace_s", "distance_m", "hall_v", "period_ms",
-    "elapsed_s", "watts",
+    "time_us",
+    "rpm",
+    "pace_s",
+    "distance_m",
+    "hall_v",
+    "period_ms",
+    "elapsed_s",
+    "watts",
 ]
 
 # Show every Nth sample in the terminal (1 = every sample). Every sample is
@@ -54,17 +60,48 @@ PRINT_EVERY = 100
 BAR_WIDTH = 50
 
 
+def choose_recording_dir(name=None):
+    """Choose a new named capture without replacing an existing folder."""
+    supplied_name = name is not None
+    while True:
+        if not supplied_name:
+            try:
+                name = input("Save recording as (e.g. calibration_01): ")
+            except (EOFError, KeyboardInterrupt):
+                sys.exit("\nRecording cancelled before connecting.")
+        name = name.strip()
+        if not name or name in (".", "..") or any(c in name for c in "/\\"):
+            error = "Enter a recording name without path separators."
+        elif (OUTPUT_DIR / name).exists():
+            error = f"Recording '{name}' already exists. Choose a different name."
+        else:
+            return OUTPUT_DIR / name
+        if supplied_name:
+            sys.exit(error)
+        print(error)
+
+
 def find_port():
     """Auto-select only when there is a single USB-serial candidate."""
-    ports = [p.device for p in list_ports.comports()
-             if any(tag in p.device for tag in
-                    ("usbserial", "wchusbserial", "SLAB_USBtoUART", "ttyUSB"))]
+    ports = [
+        p.device
+        for p in list_ports.comports()
+        if any(
+            tag in p.device
+            for tag in ("usbserial", "wchusbserial", "SLAB_USBtoUART", "ttyUSB")
+        )
+    ]
     if len(ports) == 1:
         return ports[0]
     if len(ports) > 1:
-        sys.exit("Multiple serial ports found: " + ", ".join(ports)
-                 + "\nPass the logger's port explicitly: python3 record_perg.py PORT")
-    sys.exit("No ESP32 serial port found. Plug in the board or pass the port as an argument.")
+        sys.exit(
+            "Multiple serial ports found: "
+            + ", ".join(ports)
+            + "\nPass the logger's port explicitly: python3 record_perg.py PORT"
+        )
+    sys.exit(
+        "No ESP32 serial port found. Plug in the board or pass the port as an argument."
+    )
 
 
 def parse_line(raw):
@@ -105,8 +142,11 @@ def wait_for_sample(ser):
         if raw.endswith(b"\n") and row is not None:
             return row
 
-    detail = (f"Received bytes, but no valid time_us,adc_value CSV. "
-              f"Last bytes: {received!r}" if received else "No serial data received.")
+    detail = (
+        f"Received bytes, but no valid time_us,adc_value CSV. Last bytes: {received!r}"
+        if received
+        else "No serial data received."
+    )
     raise RuntimeError(
         f"No valid samples within {CONNECT_TIMEOUT_S} seconds. {detail}\n"
         f"Check the selected port and upload perg_logger.ino or "
@@ -115,14 +155,75 @@ def wait_for_sample(ser):
     )
 
 
+def wait_for_session_start(ser):
+    """Arm the updated full logger and wait for the LCD Start button."""
+    ser.write(b"A")
+    ser.flush()
+    print("Preparing the LCD Start/Stop button...")
+    ready = False
+    deadline = time.monotonic() + CONNECT_TIMEOUT_S
+    next_arm_attempt = time.monotonic() + 1
+    while True:
+        if not ready:
+            now = time.monotonic()
+            if now > deadline:
+                raise RuntimeError(
+                    "No session_ready reply after repeated attempts. Check the "
+                    "sensor ESP32's USB connection and confirm it has the updated "
+                    "Start/Stop perg_full_logger sketch."
+                )
+            if now >= next_arm_attempt:
+                # Arming is idempotent. Retry only before readiness; never reset
+                # a session after telling the user to press Start.
+                ser.write(b"A")
+                ser.flush()
+                next_arm_attempt = now + 1
+        raw = ser.read_until(b"\n", size=MAX_LINE_BYTES)
+        if not raw.endswith(b"\n"):
+            continue
+        parts = raw.decode(errors="ignore").strip().split(",")
+        if len(parts) == 2 and parts[0] in ("session_ready", "session_start"):
+            try:
+                start_us = int(parts[1])
+            except ValueError:
+                continue
+            if parts[0] == "session_ready":
+                ready = True
+                print(
+                    "Ready: tap START on the LCD, then paddle. Tap STOP to finish and save."
+                )
+            elif ready:
+                return start_us
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Record Perg Hall samples and telemetry over USB.")
-    parser.add_argument("port", nargs="?", help="USB serial port; auto-detect if omitted")
-    parser.add_argument("--baud", type=int, default=BAUD,
-                        help=f"must match the uploaded sketch (default: {BAUD})")
+    parser = argparse.ArgumentParser(
+        description="Record Perg Hall samples and telemetry over USB."
+    )
+    parser.add_argument(
+        "port", nargs="?", help="USB serial port; auto-detect if omitted"
+    )
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=BAUD,
+        help=f"must match the uploaded sketch (default: {BAUD})",
+    )
+    parser.add_argument("--name", help="new recording name; prompts if omitted")
+    parser.add_argument(
+        "--start-on-button",
+        "--start-on-motion",
+        dest="session_control",
+        action="store_true",
+        help="LCD Start/Stop controls capture with session-relative timestamps "
+        "(--start-on-motion is a legacy alias; motion no longer starts the timer)",
+    )
     args = parser.parse_args()
     if args.baud <= 0:
         parser.error("--baud must be positive")
+    recording_dir = choose_recording_dir(args.name)
+    filename = recording_dir / "perg_data.csv"
+    telemetry_filename = recording_dir / "perg_telemetry.csv"
     port = args.port or find_port()
     print(f"Connecting to {port} at {args.baud} baud")
 
@@ -138,31 +239,54 @@ def main():
         ser.read_until(b"\n", size=MAX_LINE_BYTES)
         first_row = wait_for_sample(ser)
         print(f"Connected to {port}: receiving Hall sensor samples")
-        print(f"Recording to {FILENAME}... press Ctrl+C to stop")
-        print(f"Bluetooth telemetry mirrored over USB goes to {TELEMETRY_FILENAME}")
+        start_us = 0
+        if args.session_control:
+            start_us = wait_for_session_start(ser)
+            first_row = None
         start = time.time()
         last_report = start
 
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        with open(FILENAME, "w", newline="") as file, \
-                open(TELEMETRY_FILENAME, "w", newline="") as telemetry_file:
+        # Reserve the folder exclusively, including if another recorder started
+        # after the name check. Never truncate an existing recording.
+        recording_dir.mkdir(parents=True, exist_ok=False)
+        with (
+            open(filename, "x", newline="") as file,
+            open(telemetry_filename, "x", newline="") as telemetry_file,
+        ):
+            print(f"Recording to {filename}... press Ctrl+C to stop")
+            print(f"Bluetooth telemetry mirrored over USB goes to {telemetry_filename}")
             writer = csv.writer(file)
             telemetry_writer = csv.writer(telemetry_file)
             telemetry_writer.writerow(TELEMETRY_COLUMNS)
             writer.writerow(["time_us", "adc_value"])
-            writer.writerow(first_row)
-            count = 1
+            if first_row is not None:
+                writer.writerow([(first_row[0] - start_us) % (1 << 32), first_row[1]])
+                count = 1
 
             while True:
                 raw = ser.read_until(b"\n", size=MAX_LINE_BYTES)
                 if not raw.endswith(b"\n"):
                     continue
+                if args.session_control and raw.startswith(b"session_stop,"):
+                    try:
+                        int(raw.decode("ascii").strip().split(",")[1])
+                    except (ValueError, UnicodeDecodeError, IndexError):
+                        continue
+                    print(f"\nLCD STOP received. Saved {count} samples to {filename}")
+                    print(
+                        f"Saved {telemetry_count} telemetry updates to {telemetry_filename}"
+                    )
+                    break
                 telemetry = parse_telemetry(raw)
                 row = parse_line(raw) if telemetry is None else None
                 if telemetry is not None:
+                    if args.session_control:
+                        telemetry[0] = str((int(telemetry[0]) - start_us) % (1 << 32))
                     telemetry_writer.writerow(telemetry)
                     telemetry_count += 1
                 elif row is not None:
+                    if args.session_control:
+                        row[0] = (row[0] - start_us) % (1 << 32)
                     writer.writerow(row)
                     count += 1
                 else:
@@ -178,20 +302,24 @@ def main():
                 now = time.time()
                 if now - last_report >= 1:
                     rate = count / (now - start)
-                    print(f"--- {count} samples ({rate:.0f}/s), "
-                          f"{telemetry_count} telemetry updates ---")
+                    print(
+                        f"--- {count} samples ({rate:.0f}/s), "
+                        f"{telemetry_count} telemetry updates ---"
+                    )
                     file.flush()
                     telemetry_file.flush()
                     last_report = now
 
     except KeyboardInterrupt:
         if count:
-            print(f"\nStopped. Saved {count} samples to {FILENAME}")
-            print(f"Saved {telemetry_count} telemetry updates to {TELEMETRY_FILENAME}")
+            print(f"\nStopped. Saved {count} samples to {filename}")
+            print(f"Saved {telemetry_count} telemetry updates to {telemetry_filename}")
         else:
             print("\nStopped before recording started.")
     except RuntimeError as error:
         sys.exit(str(error))
+    except OSError as error:
+        sys.exit(f"Could not save recording: {error}")
     finally:
         ser.close()
 

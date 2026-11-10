@@ -8,3 +8,8 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# Arduino metadata generated for this Mac's VS Code C++ editor.
+/.vscode/arduino-build/
+/.vscode/compile_commands.json
+/.vscode/c_cpp_properties.json

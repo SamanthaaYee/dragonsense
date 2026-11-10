@@ -18,7 +18,8 @@
  *   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
  * where hall_v is the instantaneous Hall voltage, period_ms is the magnet
  * pulse interval (the flywheel-revolution period is 8x that), elapsed_s is
- * the time since the logger booted, and watts is the drag-model power.
+ * the time since the LCD Start button, frozen by Stop.
+ * USB session_start,time_us and session_stop,time_us markers control capture.
  *
  * Idle detection: when the flywheel is idle the signal is flat, and ADC
  * noise alone makes the adaptive envelope span collapse to ~±0.005 V
@@ -146,9 +147,10 @@ BluetoothSerial SerialBT;
 // A one-item queue copies complete lines between tasks. The detector never
 // waits for Bluetooth; a slow/disconnected display gets the newest update.
 struct TelemetryLine {
-  char text[72];
+  char text[104];
 };
 QueueHandle_t telemetryQueue = nullptr;
+QueueHandle_t commandQueue = nullptr;
 
 void bluetoothTask(void *parameter) {
   if (!SerialBT.begin(BT_LOCAL_NAME, true)) { // master: initiate connection
@@ -156,16 +158,36 @@ void bluetoothTask(void *parameter) {
     return;
   }
 
+  char command[12];
+  size_t used = 0;
+  bool overflow = false;
   for (;;) {
     if (!SerialBT.connected()) {
+      used = 0;
+      overflow = false;
       if (!SerialBT.connect(displayMac)) {
         vTaskDelay(pdMS_TO_TICKS(2000));
         continue;
       }
     }
 
+    // Receive short newline-delimited commands without blocking sampling.
+    while (SerialBT.available()) {
+      char c = SerialBT.read();
+      if (c == '\n') {
+        command[used] = '\0';
+        char action = !overflow && strcmp(command, "START") == 0 ? 'S' :
+                      !overflow && strcmp(command, "STOP") == 0 ? 'T' : 0;
+        if (action && commandQueue) xQueueSend(commandQueue, &action, 0);
+        used = 0;
+        overflow = false;
+      } else if (c != '\r') {
+        if (used < sizeof(command) - 1) command[used++] = c;
+        else overflow = true;
+      }
+    }
     TelemetryLine line;
-    if (xQueueReceive(telemetryQueue, &line, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xQueueReceive(telemetryQueue, &line, pdMS_TO_TICKS(10)) == pdTRUE) {
       SerialBT.print(line.text); // newline-delimited CSV for the CYD
     }
   }
@@ -193,6 +215,43 @@ const float VOLT_BIAS_COUNTS = 1870.0f;
 float lastVolt = 0.0f;
 
 float distanceM = 0.0f;           // integral of drag-model speed
+bool sessionStarted = false;
+unsigned long sessionStartMs = 0;
+unsigned long sessionElapsedMs = 0;
+unsigned long lastDistanceUs = 0;
+
+void sendTelemetry(unsigned long nowUs);
+
+void controlSession(char action) {
+  unsigned long nowUs = micros();
+  if (action == 'S' && !sessionStarted) {
+    sessionStarted = true;
+    sessionStartMs = millis();
+    sessionElapsedMs = 0;
+    distanceM = 0;
+    lastDistanceUs = nowUs;
+    Serial.print("session_start,");
+    Serial.println(nowUs);
+    sendTelemetry(nowUs);
+  } else if (action == 'T' && sessionStarted) {
+    // Integrate and report the final distance before freezing the session.
+    sendTelemetry(nowUs);
+    sessionElapsedMs = millis() - sessionStartMs;
+    sessionStarted = false;
+    sendTelemetry(nowUs);
+    Serial.print("session_stop,");
+    Serial.println(nowUs);
+  } else if (action == 'A') {
+    // The USB recorder arms a new session without any reset-button timing.
+    sessionStarted = false;
+    sessionElapsedMs = 0;
+    distanceM = 0;
+    lastDistanceUs = nowUs;
+    Serial.print("session_ready,");
+    Serial.println(nowUs);
+    sendTelemetry(nowUs);
+  }
+}
 
 unsigned long nextSampleUs;
 unsigned long nextTelemetryMs;
@@ -206,6 +265,7 @@ void setup() {
   analogSetPinAttenuation(HALL_PIN, ADC_11db); // full range ~0-3.1 V
 
   telemetryQueue = xQueueCreate(1, sizeof(TelemetryLine));
+  commandQueue = xQueueCreate(8, sizeof(char));
   if (telemetryQueue != nullptr) {
     // Keep potentially blocking Bluetooth calls out of the sampling loop.
     if (xTaskCreate(bluetoothTask, "perg-bluetooth", 4096, nullptr, 1,
@@ -266,10 +326,17 @@ void onPulse(unsigned long nowUs) {
 }
 
 void loop() {
+  // Session state belongs to this task; the Bluetooth task only queues commands.
+  char action;
+  if (commandQueue && xQueueReceive(commandQueue, &action, 0) == pdTRUE) {
+    controlSession(action);
+  }
+  // A single-byte USB arm command is used only by --start-on-button.
+  if (Serial.available() && Serial.read() == 'A') controlSession('A');
   // ---- Telemetry first, unconditional and on its own timeline ----
   // Emitted every TELEMETRY_PERIOD_MS no matter what the detector is doing:
   // the voltage field always reflects the last ADC reading, RPM is 0 when
-  // the flywheel is stopped, and elapsed time always increases.
+  // the flywheel is stopped. The Start/Stop button controls elapsed time.
   if ((long)(millis() - nextTelemetryMs) >= 0) {
     nextTelemetryMs = millis() + TELEMETRY_PERIOD_MS;
     sendTelemetry(micros());
@@ -358,7 +425,7 @@ void sendTelemetry(unsigned long nowUs) {
   //   2. This spin timeout: the gate may still be open while the flywheel
   //      decelerates, but with no pulse for SPIN_TIMEOUT_US it is stopped.
   // Either way, the telemetry line below is still emitted so the display
-  // keeps showing voltage (and 0 rpm / --:-- pace) and time keeps ticking.
+  // keeps showing voltage (and 0 rpm / --:-- pace). Start/Stop controls time.
   if (lastPulseUs != 0 && (nowUs - lastPulseUs) > SPIN_TIMEOUT_US) {
     rpmEma = 0.0f;
     rpmValid = false;
@@ -375,30 +442,31 @@ void sendTelemetry(unsigned long nowUs) {
 
   // Distance integrates the drag-model speed, so it always agrees with the
   // pace display.
-  static unsigned long lastTelemetryUs = 0;
-  if (lastTelemetryUs != 0) {
-    float dtS = (nowUs - lastTelemetryUs) / 1000000.0f;
+  if (sessionStarted && lastDistanceUs != 0) {
+    float dtS = (nowUs - lastDistanceUs) / 1000000.0f;
     distanceM += speedMs * dtS;
   }
-  lastTelemetryUs = nowUs;
+  lastDistanceUs = nowUs;
 
   // Telemetry line (CSV, easy to parse on the CYD):
   //   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
   // period_ms is the magnet pulse interval; the full revolution period is
-  // 8x that. elapsed_s counts from logger boot. watts is the drag-model
+  // 8x that. elapsed_s is controlled by Start/Stop. watts is the drag-model
   // power behind the pace (see flywheelPower()).
-  float elapsedS = millis() / 1000.0f;
+  float elapsedS = (sessionStarted ? millis() - sessionStartMs : sessionElapsedMs) / 1000.0f;
   float watts = flywheelPower(rpmEma);
   TelemetryLine line = {};
-  snprintf(line.text, sizeof(line.text), "%.1f,%.1f,%.1f,%.3f,%.1f,%.1f,%.0f\n",
+  char values[72];
+  snprintf(values, sizeof(values), "%.1f,%.1f,%.1f,%.3f,%.1f,%.1f,%.0f\n",
            rpmEma, paceS, distanceM, lastVolt, periodMs, elapsedS, watts);
+  snprintf(line.text, sizeof(line.text), "session_state,%d\n%s", sessionStarted ? 1 : 0, values);
   // Mirror exactly the formatted Bluetooth fields, with the update timestamp
   // so the recorder can align telemetry with raw Hall samples. USB writes
   // stay in this task to prevent telemetry and sample lines interleaving.
   Serial.print("telemetry,");
   Serial.print(nowUs);
   Serial.print(',');
-  Serial.print(line.text);
+  Serial.print(values);
   if (telemetryQueue != nullptr) {
     xQueueOverwrite(telemetryQueue, &line);
   }
