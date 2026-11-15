@@ -4,11 +4,11 @@
  * Receives telemetry lines over Bluetooth SPP from the ESP32 running
  * perg_bt_logger.ino or perg_full_logger.ino every 100 ms (10 Hz):
  *
- *   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
+ *   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts,stroke_rate_spm
  *
  * and shows:
  *   - RPM and pace (mm:ss per 500 m) as big values
- *   - distance (m), pulse period (ms), peak watts (max over the last
+ *   - distance (m), stroke rate (SPM), peak watts (max over the last
  *     1.25 s), elapsed time (mm:ss), watts, and the instantaneous Hall
  *     voltage (bottom right, 3 decimals)
  *
@@ -70,7 +70,7 @@ const int PACE_LABEL_X = 180, PACE_LABEL_Y = 40;
 const int PACE_X = 180, PACE_Y = 58, PACE_W = 120, PACE_H = 60;
 
 // Bottom strip, two rows of (label font 2, value font 4):
-// row 1: DISTANCE, PERIOD, PEAK      row 2: TIME, WATTS, VOLT (right-aligned)
+// row 1: DISTANCE, SPM, PEAK      row 2: TIME, WATTS, VOLT (right-aligned)
 const int DIST_LABEL_X = 20,   DIST_LABEL_Y = 128;
 const int DIST_X = 20,         DIST_Y = 144, DIST_W = 110;
 const int PERIOD_LABEL_X = 130, PERIOD_LABEL_Y = 128;
@@ -86,7 +86,7 @@ const int VOLT_LABEL_X = 310,  VOLT_LABEL_Y = 176;
 const int VOLT_ERASE_X = 210,  VOLT_ERASE_Y = 192, VOLT_ERASE_W = 100;
 const int VOLT_ALIGN_X = 310,  VOLT_ALIGN_Y = 192;
 
-char buf[72]; // matches the logger's telemetry line buffer
+char buf[112]; // accommodates stroke rate appended by the full logger
 
 // Keep enough readings for the 1.25 s peak window at 100 ms updates.
 // Use timestamps so slower/delayed packets do not stretch the window.
@@ -187,9 +187,9 @@ void drawStatic() {
   tft.setTextColor(COL_TEXT);
   tft.setTextDatum(TL_DATUM);
   tft.drawString("RPM",  RPM_LABEL_X,  RPM_LABEL_Y, 2);
-  tft.drawString("PACE", PACE_LABEL_X, PACE_LABEL_Y, 2);
+  tft.drawString("PACE /500m", PACE_LABEL_X, PACE_LABEL_Y, 2);
   tft.drawString("DISTANCE", DIST_LABEL_X, DIST_LABEL_Y, 2);
-  tft.drawString("PERIOD", PERIOD_LABEL_X, PERIOD_LABEL_Y, 2);
+  tft.drawString("SPM", PERIOD_LABEL_X, PERIOD_LABEL_Y, 2);
   tft.drawString("PEAK", PEAK_LABEL_X, PEAK_LABEL_Y, 2);
   tft.drawString("TIME", ELAPSED_LABEL_X, ELAPSED_LABEL_Y, 2);
   tft.drawString("WATTS", WATTS_LABEL_X, WATTS_LABEL_Y, 2);
@@ -260,10 +260,11 @@ void handleLine() {
     return;
   }
 
-  float rpm, paceS, distM, volt, periodMs, elapsedS, watts;
-  if (sscanf(buf, "%f,%f,%f,%f,%f,%f,%f",
+  float rpm, paceS, distM, volt, periodMs, elapsedS, watts, strokeRate = 0;
+  int fields = sscanf(buf, "%f,%f,%f,%f,%f,%f,%f,%f",
              &rpm, &paceS, &distM, &volt, &periodMs, &elapsedS,
-             &watts) != 7) {
+             &watts, &strokeRate);
+  if (fields < 7) {
     Serial.print("Bad telemetry: ");
     Serial.println(buf);
     return;
@@ -291,12 +292,9 @@ void handleLine() {
   // Pace as mm:ss per 500 m. paceS == 0 means "not moving" -> "--:--"
   // (basic font, because the 7-segment font has no '-' glyph).
   if (paceS > 0) {
-    int minutes = (int)(paceS / 60.0f);
-    int seconds = (int)(paceS - 60.0f * minutes) + 0.5f;
-    if (seconds >= 60) { // rounding pushed it over a minute
-      minutes++;
-      seconds = 0;
-    }
+    int rounded = (int)(paceS + 0.5f);
+    int minutes = rounded / 60;
+    int seconds = rounded % 60;
     snprintf(text, sizeof(text), "%d:%02d", minutes, seconds);
     drawBig(PACE_X, PACE_Y, PACE_W, PACE_H, text);
   } else {
@@ -310,9 +308,9 @@ void handleLine() {
   snprintf(text, sizeof(text), "%.1f m", distM);
   drawValueAt(DIST_X, DIST_Y, DIST_W, text);
 
-  // Pulse period (median interval between detected magnet pulses)
-  if (periodMs > 0) {
-    snprintf(text, sizeof(text), "%.1f ms", periodMs);
+  // Calibrated catch-to-catch rate; older seven-field loggers have no SPM.
+  if (fields == 8 && strokeRate > 0) {
+    snprintf(text, sizeof(text), "%.0f", strokeRate);
   } else {
     snprintf(text, sizeof(text), "--");
   }
@@ -324,7 +322,7 @@ void handleLine() {
   snprintf(text, sizeof(text), "%d:%02d", emin, esec);
   drawValueAt(ELAPSED_X, ELAPSED_Y, ELAPSED_W, text);
 
-  // Watts (drag-model power behind the pace)
+  // Watts (cube of the trailing average angular speed)
   snprintf(text, sizeof(text), "%.0f W", watts);
   drawValueAt(WATTS_X, WATTS_Y, WATTS_W, text);
 

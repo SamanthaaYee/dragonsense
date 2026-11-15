@@ -251,15 +251,44 @@ Raw sample CSVs contain:
 | `adc_value` | Raw 12-bit ADC reading (0–4095), not calibrated voltage or force |
 
 Telemetry CSVs contain
-`time_us,rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts`.
+`time_us,rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts,stroke_rate_spm`.
+The recorder also accepts older telemetry, leaving stroke rate blank.
 Pace is seconds per 500 m; period is the interval between sensor pulses.
 The display also shows peak watts over the last 1.25 seconds.
 
 RPM conversion assumes eight pulses per flywheel revolution:
 `RPM = 60 / (8 × pulse_interval_seconds)`. Confirm this against the hardware.
-Power, pace, and distance use an adjustable drag model and need calibration
-against the Perg display. No calibration from the video comparisons has
-been applied to the firmware.
+The full logger now uses the analysis in `perg_rpm_stroke_rate_v2.xlsx`:
+
+- Crossings: arm below ADC 1670, then count upward crossings of ADC 1820,
+  interpolating their timestamps between samples. Eight accepted pulse
+  intervals make one turn. Distance is turns × **0.2481 m/rev**, counted only
+  while the session runs; Stop freezes the total.
+- RPM: average per-pulse RPM within ±0.15 s. Catch detection looks for a
+  minimum within ±0.3 s, with at least an 8 RPM range. These centered windows
+  need about 0.45 s of lookahead. Startup waits for complete windows; equal
+  minima count only once. Stroke rate is `60 / catch_interval_s`, averaged
+  across up to four intervals as in the workbook's Console check tab.
+- Watts: **0.0001578 × average_omega³**, where omega is per-pulse RPM × 2π/60
+  and the average uses pulses in the trailing 1.5 s. Watts remain zero until
+  the first full averaging window is available.
+- Pace: **500 × Δtime / Δdistance**, measuring complete flywheel turns over
+  approximately 1.5 s, in seconds per 500 m. The window extends to the first
+  whole turn covering 1.5 s; startup uses available whole turns and shows
+  no pace until one complete turn is available. Timing from the same magnet
+  to itself cancels uneven magnet spacing. Both endpoints use sensor pulse
+  timestamps so telemetry timing cannot introduce pace jitter.
+  This is recent pace, not the session average. It stays live outside a
+  session; the session distance still freezes on Stop. No pulses for 0.7 s
+  clears RPM, watts, pace and stroke detection history. Stroke rate also
+  expires after 5 s without a detected catch, even if the wheel keeps spinning.
+
+The CYD shows `PACE /500m` as mm:ss and `SPM` in the former pulse-period
+position. Pulse period remains in the telemetry. Upload both updated sketches.
+The fitted constants come from one **drag-61** session and may need refitting
+for other drag settings; ADC midline/hysteresis may also need adjustment for
+another sensor setup. `PergMetrics.h` holds these settings. The older
+`perg_bt_logger` sketch still uses its original model.
 
 Anna's and Misha's session folders preserve the supplied files without
 altering their values. The latest local raw capture duplicates Misha's saved

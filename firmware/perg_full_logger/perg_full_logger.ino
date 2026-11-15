@@ -12,20 +12,14 @@
  * unavailable display does not stop USB logging. Only the latest telemetry
  * is kept while disconnected; raw samples are sent only over USB.
  * Each telemetry update is also mirrored over USB as:
- *   telemetry,time_us,rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
+ *   telemetry,time_us,rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts,stroke_rate_spm
  *
  * Telemetry line (CSV, one every 100 ms):
- *   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
+ *   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts,stroke_rate_spm
  * where hall_v is the instantaneous Hall voltage, period_ms is the magnet
  * pulse interval (the flywheel-revolution period is 8x that), elapsed_s is
  * the time since the LCD Start button, frozen by Stop.
  * USB session_start,time_us and session_stop,time_us markers control capture.
- *
- * Idle detection: when the flywheel is idle the signal is flat, and ADC
- * noise alone makes the adaptive envelope span collapse to ~±0.005 V
- * (spikes to ~0.05 V). The detector is therefore gated on signal amplitude:
- * pulses only count when the envelope span exceeds GATE_ON_V (and the gate
- * closes again below GATE_OFF_V), so idle noise cannot register as RPM.
  *
  * Wiring (same as perg_logger.ino):
  *   Perg 3.5 mm L (signal) --[10 kΩ]-- GPIO 27
@@ -36,25 +30,15 @@
  * (SPP) does not block ADC2, so this sketch can use both at once. Do NOT add
  * Wi-Fi here without moving the sensor to an ADC1 pin (GPIO 32-39).
  *
- * RPM detection - and why the voltage is NOT smoothed:
- *   Each of the 8 flywheel magnets produces one pulse. The raw signal is a
- *   ~0.6 VAC sine-ish wave centered near mid-scale, so each pulse is one full
- *   cycle and RPM = 60 / (pulse_interval * 8).
- *   A moving average "over a few samples" would shift every crossing by
- *   ~(N-1)/2 samples in time. At 2 kHz sampling and ~60 Hz pulse rate a
- *   3-sample smoothing already moves the crossing ~0.5 ms, which is ~3% of the
- *   interval - a direct RPM error. So the voltage is used raw. Noise is
- *   handled where it costs no timing accuracy:
- *     - A slow envelope follower (envHi/envLo) tracks the signal's rails and
- *       sets an adaptive midpoint threshold.
- *     - A Schmitt trigger (separate rising 65% / falling 35% thresholds)
- *       rejects noise around the threshold instead of smoothing it away.
- *     - The pulse INTERVALS, not the voltage, are then smoothed: the median
- *       of the last 5 intervals rejects double-triggered or missed pulses,
- *       and an EMA on RPM gives a stable display value.
+ * Calibration: perg_rpm_stroke_rate_v2.xlsx (drag 61). Pulse crossings
+ * are interpolated at ADC 1820, armed below 1670. Centered RPM/stroke
+ * windows run with 0.45 s latency. Distance counts turns at 0.2481 m/rev;
+ * power cubes the trailing 1.5 s mean angular speed. Pace measures distance
+ * gained / time over whole turns spanning about 1.5 s, in seconds per 500 m.
  */
 
 #include "BluetoothSerial.h"
+#include "PergMetrics.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -67,41 +51,8 @@ const unsigned long SAMPLE_PERIOD_US = 500; // 0.5 ms -> 2000 samples/s
 // would require up to 170 kB/s and cannot fit at this baud rate.
 const unsigned long BAUD = 460800;
 
-// ---------------- Flywheel geometry ----------------
-const int MAGNETS_PER_REV = 8;
-
-// Distance calibration for the drag-based speed model: with the flywheel
-// spinning at `rpm`, the drag model gives absorbed power, the erg-standard
-// power-to-speed relation gives m/s, and distance is the integral of speed.
-// (The old metersPerRev() approach is gone: everything now derives from the
-// drag model, so pace and distance can never disagree.)
-
-// ---------------- Pace (drag model) ----------------
-// The Perg reports a drag coefficient of 61 for its flywheel, in unknown
-// units. Flywheel power absorbed by drag grows with the cube of angular
-// speed; the erg-standard power-to-speed relation is P = 2.8 * v³
-// (Concept2 calibration), so speed v = cbrt(P / 2.8) m/s and
-// pace = 500 m / v.
-//
-// The 61 is NOT watts per (rad/s)³ - used directly it made the pace read
-// ~8 s/500m, i.e. power was ~3000x too high (pace scales with P^(-1/3)).
-// DRAG_WATT_SCALE converts the machine's drag units into watts per
-// (rad/s)³. Default chosen so a typical working flywheel speed (~450 rpm,
-// ω ≈ 47 rad/s) lands near a realistic ~1:50/500m pace:
-//   P = 61 * 4.0e-5 * ω³ ≈ 250 W  ->  v ≈ 4.5 m/s  ->  ≈ 111 s
-// Calibrate: row at a speed whose pace the machine shows, then adjust
-// DRAG_WATT_SCALE until the display matches (pace scales with the cube root
-// of the scale, so it is forgiving).
-const float DRAG_COEFF = 61.0;
-const float DRAG_WATT_SCALE = 4.0e-5f;
-const float POWER_TO_SPEED_K = 2.8f;
-const float PACE_DISTANCE_M = 500.0; // rowing standard: pace per 500 m
-
-// Flywheel power absorbed by drag at a given rpm (watts).
-float flywheelPower(float rpm) {
-  float omega = rpm * 6.2831853f / 60.0f; // rad/s
-  return DRAG_COEFF * DRAG_WATT_SCALE * omega * omega * omega;
-}
+// Calibration and streaming pulse/stroke analysis live in PergMetrics.h.
+PergMetrics metrics;
 
 // ---------------- Bluetooth ----------------
 const char *BT_LOCAL_NAME = "perg-logger";
@@ -110,44 +61,13 @@ uint8_t displayMac[6] = {0xA4, 0xF0, 0x0F, 0x8D, 0x32, 0x7E};
 
 const unsigned long TELEMETRY_PERIOD_MS = 100; // 10 telemetry updates/s
 
-// ---------------- Pulse detection ----------------
-// Envelope follower: how fast each rail relaxes toward the opposite rail when
-// the signal does not reach it. Scale decay with the sample period to keep
-// approximately the same 0.5 s rail relaxation time when changing the rate,
-// slow enough to ride out one pulse cycle.
-const float ENV_DECAY_PER_SAMPLE = SAMPLE_PERIOD_US / 500000.0f;
-// Schmitt thresholds as fractions of the envelope span (envLo..envHi):
-// pulse starts on a rising crossing at 65%, ends on a falling crossing at
-// 35%. The gap between them is the hysteresis that swallows noise.
-const float THR_UP_F = 0.65f;
-const float THR_DN_F = 0.35f;
-// Valid magnet-to-magnet interval window. Outside it the interval is an
-// artifact (noise, missed pulse, flywheel stopped) and gets discarded.
-const float MIN_INTERVAL_MS = 4.0f;   // faster than ~1900 rpm
-const float MAX_INTERVAL_MS = 300.0f; // slower than ~25 rpm (coasting)
-// Noise-floor gate (in volts, peak-to-peak envelope span). At idle the Hall
-// signal is flat and only noise remains - observed ~±0.004 V with spikes to
-// ~0.048 V (≈0.1 V p-p) - while real magnet pulses ride at ~0.6 VAC
-// (≈1.2 V p-p). Detection only runs when the span is above GATE_ON_V, and
-// switches off again below GATE_OFF_V, so the gate itself has hysteresis and
-// cannot chatter around one boundary.
-const float GATE_ON_V = 0.1f;  // ~1/4 of a real pulse's p-p swing
-const float GATE_OFF_V = 0.05f; // safely above the 0.048 V idle spikes
-// No valid pulse for this long -> the flywheel has stopped, RPM goes to 0.
-const unsigned long SPIN_TIMEOUT_US = 700000UL;
-
-// Interval smoothing: median of the last N valid intervals, then an EMA on
-// the resulting RPM.
-const int MEDIAN_N = 5;
-const float RPM_EMA_ALPHA = 0.25f;
-
 // ---------------- State ----------------
 BluetoothSerial SerialBT;
 
 // A one-item queue copies complete lines between tasks. The detector never
 // waits for Bluetooth; a slow/disconnected display gets the newest update.
 struct TelemetryLine {
-  char text[104];
+  char text[144];
 };
 QueueHandle_t telemetryQueue = nullptr;
 QueueHandle_t commandQueue = nullptr;
@@ -193,20 +113,6 @@ void bluetoothTask(void *parameter) {
   }
 }
 
-float envHi, envLo;      // adaptive signal rails (ADC counts)
-bool stateHigh = false;  // Schmitt trigger state
-bool gateOpen = false;   // noise-floor gate: signal amplitude is real
-
-unsigned long lastPulseUs = 0;    // 0 = no pulse seen yet
-unsigned long pulseCount = 0;     // total magnet pulses since boot
-float recentIntervals[MEDIAN_N];  // circular buffer of valid intervals (ms)
-int intervalCount = 0;
-int intervalIdx = 0;
-
-float rpmEma = 0.0f;              // smoothed RPM
-bool rpmValid = false;
-float periodMs = 0.0f;            // median pulse interval the detector sees
-
 // Hall voltage, same calibration as perg_logger.ino: deviation in volts
 // from the signal's ~1.64 V bias point (3.6 V across the 12-bit range,
 // bias at count 1870).
@@ -214,11 +120,11 @@ const float VOLT_FULL_SCALE = 3.6f;
 const float VOLT_BIAS_COUNTS = 1870.0f;
 float lastVolt = 0.0f;
 
-float distanceM = 0.0f;           // integral of drag-model speed
+float distanceM = 0.0f;           // accepted magnet intervals x metres per pulse
+uint32_t sessionPulseOrigin = 0;
 bool sessionStarted = false;
 unsigned long sessionStartMs = 0;
 unsigned long sessionElapsedMs = 0;
-unsigned long lastDistanceUs = 0;
 
 void sendTelemetry(unsigned long nowUs);
 
@@ -229,12 +135,12 @@ void controlSession(char action) {
     sessionStartMs = millis();
     sessionElapsedMs = 0;
     distanceM = 0;
-    lastDistanceUs = nowUs;
+    sessionPulseOrigin = metrics.pulses;
     Serial.print("session_start,");
     Serial.println(nowUs);
     sendTelemetry(nowUs);
   } else if (action == 'T' && sessionStarted) {
-    // Integrate and report the final distance before freezing the session.
+    // Report the final pulse-count distance before freezing the session.
     sendTelemetry(nowUs);
     sessionElapsedMs = millis() - sessionStartMs;
     sessionStarted = false;
@@ -246,7 +152,7 @@ void controlSession(char action) {
     sessionStarted = false;
     sessionElapsedMs = 0;
     distanceM = 0;
-    lastDistanceUs = nowUs;
+    sessionPulseOrigin = metrics.pulses;
     Serial.print("session_ready,");
     Serial.println(nowUs);
     sendTelemetry(nowUs);
@@ -279,50 +185,6 @@ void setup() {
 
   nextSampleUs = micros();
   nextTelemetryMs = millis() + TELEMETRY_PERIOD_MS;
-}
-
-// Record one detected magnet pulse: validate the interval, smooth it, and
-// update RPM / revolution counters.
-void onPulse(unsigned long nowUs) {
-  if (lastPulseUs != 0) {
-    // Interval between this pulse and the previous one, in ms.
-    float intervalMs = (nowUs - lastPulseUs) / 1000.0f;
-
-    if (intervalMs > MIN_INTERVAL_MS && intervalMs < MAX_INTERVAL_MS) {
-      recentIntervals[intervalIdx] = intervalMs;
-      intervalIdx = (intervalIdx + 1) % MEDIAN_N;
-      if (intervalCount < MEDIAN_N) intervalCount++;
-
-      // Median of the kept intervals: one outlier (missed/double pulse)
-      // cannot shift it, unlike a plain average.
-      float sorted[MEDIAN_N];
-      for (int i = 0; i < intervalCount; i++) sorted[i] = recentIntervals[i];
-      for (int i = 1; i < intervalCount; i++) { // insertion sort
-        float key = sorted[i];
-        int j = i - 1;
-        while (j >= 0 && sorted[j] > key) {
-          sorted[j + 1] = sorted[j];
-          j--;
-        }
-        sorted[j + 1] = key;
-      }
-      float medianMs = sorted[intervalCount / 2];
-      periodMs = medianMs; // reported as telemetry "period"
-
-      // f_pulses = 1/interval; RPM = f_pulses * 60 / MAGNETS_PER_REV
-      float rpm = (1000.0f / medianMs) * 60.0f / MAGNETS_PER_REV;
-
-      if (rpmValid) {
-        rpmEma += RPM_EMA_ALPHA * (rpm - rpmEma);
-      } else {
-        rpmEma = rpm;
-        rpmValid = true;
-      }
-    }
-  }
-
-  lastPulseUs = nowUs;
-  pulseCount++;
 }
 
 void loop() {
@@ -368,97 +230,24 @@ void loop() {
   // perg_logger.ino's CSV column: volts relative to the signal bias point).
   lastVolt = VOLT_FULL_SCALE * (v - VOLT_BIAS_COUNTS) / 4096.0f;
 
-  // ---- Envelope follower (raw signal, no smoothing) ----
-  if (envHi == 0 && envLo == 0) {
-    envHi = v; // first sample seeds the rails
-    envLo = v;
-  }
-  if (v > envHi) {
-    envHi = v; // attack: rail jumps to the signal instantly
-  } else {
-    envHi += (envLo - envHi) * ENV_DECAY_PER_SAMPLE; // slow release
-  }
-  if (v < envLo) {
-    envLo = v;
-  } else {
-    envLo += (envHi - envLo) * ENV_DECAY_PER_SAMPLE;
-  }
-
-  // ---- Schmitt trigger on the adaptive midpoint ----
-  float span = envHi - envLo;
-  float thrUp = envLo + span * THR_UP_F;
-  float thrDn = envLo + span * THR_DN_F;
-
-  // Noise-floor gate: convert the envelope span to volts (peak-to-peak) and
-  // compare against GATE_ON_V / GATE_OFF_V. This is what keeps the idle
-  // flywheel from reading as RPM: its noise (~±0.004 V, spikes ~0.05 V) is
-  // far below the gate, while real pulses (~0.6 VAC) open it easily.
-  float spanV = span * VOLT_FULL_SCALE / 4096.0f;
-  if (!gateOpen && spanV >= GATE_ON_V) {
-    gateOpen = true;
-  } else if (gateOpen && spanV < GATE_OFF_V) {
-    // Signal dropped back into noise: treat as stopped and reset everything
-    // so stale intervals can't survive the next real row.
-    gateOpen = false;
-    stateHigh = false;
-    rpmEma = 0.0f;
-    rpmValid = false;
-    periodMs = 0.0f;
-    intervalCount = 0;
-    lastPulseUs = 0;
-  }
-
-  if (!stateHigh && gateOpen && v >= thrUp) {
-    stateHigh = true;
-    onPulse(now); // rising edge = one magnet passed
-  } else if (stateHigh && v <= thrDn) {
-    stateHigh = false;
-  }
-
-  // ---- Telemetry is emitted at the top of loop(), unconditionally ----
+  metrics.sample((uint32_t)now, adc);
 }
 
 void sendTelemetry(unsigned long nowUs) {
-  // RPM is 0 whenever the flywheel is stopped. Two paths enforce this:
-  //   1. The noise gate closing in loop() (signal amplitude dropped into
-  //      noise), which resets everything immediately.
-  //   2. This spin timeout: the gate may still be open while the flywheel
-  //      decelerates, but with no pulse for SPIN_TIMEOUT_US it is stopped.
-  // Either way, the telemetry line below is still emitted so the display
-  // keeps showing voltage (and 0 rpm / --:-- pace). Start/Stop controls time.
-  if (lastPulseUs != 0 && (nowUs - lastPulseUs) > SPIN_TIMEOUT_US) {
-    rpmEma = 0.0f;
-    rpmValid = false;
-    periodMs = 0.0f;
-    intervalCount = 0; // stale intervals must not survive the restart
+  metrics.tick((uint32_t)nowUs);
+  if (sessionStarted) {
+    distanceM = (uint32_t)(metrics.pulses - sessionPulseOrigin) *
+                (PergMetrics::METRES_PER_REV / 8.0f);
   }
-
-  // Drag model: absorbed power -> erg-standard speed -> integrated distance.
-  // P = k*ω³, v = cbrt(P/2.8)
-  float speedMs = powf(flywheelPower(rpmEma) / POWER_TO_SPEED_K,
-                       1.0f / 3.0f);
-  // Pace in seconds per 500 m. 0 means "not moving" for the display.
-  float paceS = (speedMs > 0.05f) ? PACE_DISTANCE_M / speedMs : 0.0f;
-
-  // Distance integrates the drag-model speed, so it always agrees with the
-  // pace display.
-  if (sessionStarted && lastDistanceUs != 0) {
-    float dtS = (nowUs - lastDistanceUs) / 1000000.0f;
-    distanceM += speedMs * dtS;
-  }
-  lastDistanceUs = nowUs;
-
-  // Telemetry line (CSV, easy to parse on the CYD):
-  //   rpm,pace_s,distance_m,hall_v,period_ms,elapsed_s,watts
-  // period_ms is the magnet pulse interval; the full revolution period is
-  // 8x that. elapsed_s is controlled by Start/Stop. watts is the drag-model
-  // power behind the pace (see flywheelPower()).
+  float paceS = metrics.pace((uint32_t)nowUs);
   float elapsedS = (sessionStarted ? millis() - sessionStartMs : sessionElapsedMs) / 1000.0f;
-  float watts = flywheelPower(rpmEma);
+  float watts = metrics.watts((uint32_t)nowUs);
+  // Append stroke rate; keep the original seven fields in their existing order.
   TelemetryLine line = {};
-  char values[72];
-  snprintf(values, sizeof(values), "%.1f,%.1f,%.1f,%.3f,%.1f,%.1f,%.0f\n",
-           rpmEma, paceS, distanceM, lastVolt, periodMs, elapsedS, watts);
+  char values[112];
+  snprintf(values, sizeof(values), "%.1f,%.1f,%.1f,%.3f,%.1f,%.1f,%.0f,%.1f\n",
+           metrics.rpm, paceS, distanceM, lastVolt, metrics.periodMs, elapsedS,
+           watts, metrics.strokeRate);
   snprintf(line.text, sizeof(line.text), "session_state,%d\n%s", sessionStarted ? 1 : 0, values);
   // Mirror exactly the formatted Bluetooth fields, with the update timestamp
   // so the recorder can align telemetry with raw Hall samples. USB writes

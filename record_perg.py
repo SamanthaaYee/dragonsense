@@ -50,6 +50,7 @@ TELEMETRY_COLUMNS = [
     "period_ms",
     "elapsed_s",
     "watts",
+    "stroke_rate_spm",
 ]
 
 # Show every Nth sample in the terminal (1 = every sample). Every sample is
@@ -119,12 +120,13 @@ def parse_telemetry(raw):
     """Validate tagged USB telemetry and retain the transmitted precision."""
     try:
         parts = raw.decode("ascii").strip().split(",")
-        if len(parts) != 9 or parts[0] != "telemetry":
+        if len(parts) not in (9, 10) or parts[0] != "telemetry":
             return None
         int(parts[1])
         if not all(math.isfinite(float(value)) for value in parts[2:]):
             return None
-        return parts[1:]
+        # Older firmware has no stroke-rate field. Preserve its unknown value.
+        return parts[1:] + ([""] if len(parts) == 9 else [])
     except (UnicodeDecodeError, ValueError):
         return None
 
