@@ -1,5 +1,6 @@
 """Detect accidental edits to the archived experimental evidence."""
 
+import csv
 import hashlib
 import json
 import unittest
@@ -11,6 +12,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ArchivedDataTests(unittest.TestCase):
+    def test_pace_collection_integrity_and_recorded_timing_findings(self):
+        base = ROOT / "data/sessions/2026-11-15_pace_based"
+        manifest = json.loads((base / "manifest.json").read_text())
+        for session in manifest["recordings"]:
+            for filename, expected in session["files"].items():
+                path = base / session["folder"] / filename
+                with self.subTest(path=str(path)):
+                    self.assertEqual(
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                        expected["sha256"],
+                    )
+                    with path.open(newline="") as file:
+                        rows = csv.DictReader(file)
+                        self.assertEqual(rows.fieldnames, expected["columns"])
+                        times = []
+                        invalid_adc = 0
+                        for row in rows:
+                            times.append(int(row["time_us"]))
+                            if "adc_value" in row:
+                                invalid_adc += not 0 <= int(row["adc_value"]) <= 4095
+                    self.assertEqual(len(times), expected["rows"])
+                    self.assertEqual(times[0], expected["first_time_us"])
+                    self.assertEqual(times[-1], expected["last_time_us"])
+                    gaps = [b - a for a, b in zip(times, times[1:])]
+                    # Preserve the reported outlier rather than rewriting the
+                    # evidence to satisfy the strict replay loader.
+                    self.assertEqual(
+                        sum(gap < 0 for gap in gaps), expected["backward_timestamps"]
+                    )
+                    self.assertEqual(max(gaps), expected["max_forward_gap_us"])
+                    if filename == "perg_data.csv":
+                        self.assertEqual(invalid_adc, expected["adc_out_of_range"])
+                        self.assertEqual(
+                            sum(gap > 1500 for gap in gaps),
+                            expected["gaps_over_1500_us"],
+                        )
+
     def test_recording_checksums_and_sample_counts(self):
         base = ROOT / "data/sessions/2026-11-09"
         manifest = json.loads((base / "manifest.json").read_text())

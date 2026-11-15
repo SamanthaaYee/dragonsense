@@ -8,6 +8,11 @@ recorded or synthetic sensor waveforms into the original monitor.
 replayed drag-59 calibration. See the [November 9 progress report](docs/experiments/2026-11-09.md)
 for observed results, archived data, and known limitations.
 
+The latest Anna and Irtaza collection is labeled **pace-based**. Seven raw and
+telemetry recordings are preserved in the [pace-based archive](data/sessions/2026-11-15_pace_based/README.md).
+See the [November 15 progress note](docs/experiments/2026-11-15-pace-based.md)
+for the protocol label, timing findings, and serial connection troubleshooting.
+
 ## Project layout
 
 ```text
@@ -16,6 +21,8 @@ firmware/
   perg_bt_logger/          1 kHz Bluetooth telemetry logger
   perg_full_logger/        Combined 2 kHz USB + Bluetooth logger
   perg_stat_display/       CYD touchscreen display with Start/Stop
+  perg_full_logger_ble/    Separate BLE logger for the Freenove S3 screen
+  perg_freenove_esp32_s3_display/  Freenove FNK0104B touchscreen (BLE)
   perg_signal_player/      DAC waveform player (separate board role)
 record_perg.py             USB sample and telemetry recorder
 analyze_perg.py            Offline waveform and stroke analysis
@@ -29,6 +36,7 @@ data/
   sessions/anna/           Saved Anna raw samples and telemetry
   sessions/misha/          Saved Misha raw samples and telemetry
   sessions/2026-11-09/     Three archived recordings and checksum manifest
+  sessions/2026-11-15_pace_based/  Seven pace-based recordings and manifest
   synthetic/2026-11-09/    Two generated trials with explicit outcome records
   live/                   Named captures (local, ignored by Git)
 docs/images/              Original example analysis plot

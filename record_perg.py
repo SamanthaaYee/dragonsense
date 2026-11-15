@@ -35,6 +35,11 @@ from pathlib import Path
 import serial
 from serial.tools import list_ports
 
+try:
+    from termios import error as SerialConfigurationError
+except ImportError:  # Windows has no termios module.
+    SerialConfigurationError = OSError
+
 # Matches the full logger. Use --baud 921600 for the original perg_logger.ino.
 BAUD = 460800
 CONNECT_TIMEOUT_S = 8
@@ -229,7 +234,17 @@ def main():
     port = args.port or find_port()
     print(f"Connecting to {port} at {args.baud} baud")
 
-    ser = serial.Serial(port, args.baud, timeout=1)
+    try:
+        ser = serial.Serial(port, args.baud, timeout=1)
+    except (serial.SerialException, OSError, SerialConfigurationError) as exc:
+        sys.exit(
+            f"Could not open/configure {port} at {args.baud} baud: {exc}\n"
+            "Close Arduino Serial Monitor and other serial tools. Unplug and "
+            "reconnect the sensor logger's USB cable, then check its current port:\n"
+            "  python3 -m serial.tools.list_ports -v\n"
+            "Retry with that port. The baud rate must match the uploaded sketch "
+            "(460800 for either full logger). No recording files were created."
+        )
 
     count = 0
     telemetry_count = 0

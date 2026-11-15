@@ -64,6 +64,26 @@ class SignalTests(unittest.TestCase):
 
 
 class RecorderTests(unittest.TestCase):
+    def test_serial_configuration_failure_leaves_no_recording(self):
+        errors = [
+            recorder.SerialConfigurationError(22, "Invalid argument"),
+            recorder.serial.SerialException("Port busy"),
+        ]
+        for error in errors:
+            with (
+                self.subTest(error=error),
+                tempfile.TemporaryDirectory() as tmp,
+                patch.object(recorder, "OUTPUT_DIR", Path(tmp)),
+                patch.object(recorder.serial, "Serial", side_effect=error),
+                patch("sys.argv", ["record_perg.py", "fake", "--name", "Anna45kg"]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as result:
+                    recorder.main()
+                self.assertIn("fake at 460800 baud", str(result.exception))
+                self.assertIn("Unplug", str(result.exception))
+                self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_existing_recording_is_never_replaced(self):
         with (
             tempfile.TemporaryDirectory() as tmp,
