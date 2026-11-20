@@ -1,4 +1,5 @@
 // Code used to calibrate each of the sensors
+// DEPRECATED BECAUSE WE MOVED ON FROM ARDUINO TO ESP32 DEV BOARD
 
 float cf = 19.5; // calibration factor
 
