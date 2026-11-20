@@ -51,11 +51,11 @@ def plot(rows: list[list[float]], png_path: Path) -> None:
     right = [r[3] + r[4] for r in rows]
     balance = [r[5] for r in rows]
 
-    fig, (ax_force, ax_balance) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
-    ax_force.plot(t, left, label="Left")
-    ax_force.plot(t, right, label="Right")
-    ax_force.set_ylabel("Force (lb)")
-    ax_force.legend()
+    fig, (ax_left, ax_right, ax_balance) = plt.subplots(3, 1, sharex=True, figsize=(10, 8))
+    ax_left.plot(t, left)
+    ax_left.set_ylabel("Left force (lb)")
+    ax_right.plot(t, right)
+    ax_right.set_ylabel("Right force (lb)")
     ax_balance.plot(t, balance, color="black")
     ax_balance.axhline(0, color="gray", linewidth=0.8)
     ax_balance.set_ylabel("Balance, lb (+right / -left)")
