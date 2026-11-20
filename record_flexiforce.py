@@ -21,11 +21,11 @@ COLUMNS = ["L_bot", "L_top", "R_top", "R_bot", "balance"]
 OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "live"
 
 
-def parse(line: str) -> list[int] | None:
-    """'L_bot:12,L_top:34,...,balance:-5' -> [12, 34, ..., -5], or None if malformed."""
+def parse(line: str) -> list[float] | None:
+    """'L_bot:1.2,L_top:3.4,...,balance:-0.5' -> [1.2, 3.4, ..., -0.5], or None if malformed."""
     try:
         fields = dict(part.split(":") for part in line.strip().split(","))
-        return [int(fields[name]) for name in COLUMNS]
+        return [float(fields[name]) for name in COLUMNS]
     except (ValueError, KeyError):
         return None
 
@@ -54,11 +54,11 @@ def plot(rows: list[list[float]], png_path: Path) -> None:
     fig, (ax_force, ax_balance) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
     ax_force.plot(t, left, label="Left")
     ax_force.plot(t, right, label="Right")
-    ax_force.set_ylabel("Force (raw ADC)")
+    ax_force.set_ylabel("Force (lb)")
     ax_force.legend()
     ax_balance.plot(t, balance, color="black")
     ax_balance.axhline(0, color="gray", linewidth=0.8)
-    ax_balance.set_ylabel("Balance (+right / -left)")
+    ax_balance.set_ylabel("Balance, lb (+right / -left)")
     ax_balance.set_xlabel("Time (s)")
     fig.tight_layout()
     fig.savefig(png_path)
