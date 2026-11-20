@@ -94,7 +94,7 @@ float flywheelPower(float rpm) {
 // ---------------- Bluetooth ----------------
 const char *BT_LOCAL_NAME = "perg-logger";
 // Bluetooth MAC of the CYD running perg_stat_display.ino.
-const char *DISPLAY_MAC = "A4:F0:0F:8D:32:7E";
+const char *DISPLAY_MAC = "A4:F0:0F:8D:32:7E"; // S3 Display is 14:c1:9f:d0:d9:7d
 uint8_t displayMac[6] = {0xA4, 0xF0, 0x0F, 0x8D, 0x32, 0x7E};
 
 const unsigned long TELEMETRY_PERIOD_MS = 100; // 10 telemetry updates/s
