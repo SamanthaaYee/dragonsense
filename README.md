@@ -77,10 +77,10 @@ python3 record_perg.py /dev/cu.usbserial-10
 ```
 
 For the original USB-only `firmware/perg_logger/perg_logger.ino` sketch,
-which samples at 1 kHz, select its matching baud rate:
+which samples at 1 kHz, select its matching baud rate and start immediately:
 
 ```bash
-python3 record_perg.py /dev/cu.usbserial-210 --baud 921600
+python3 record_perg.py /dev/cu.usbserial-210 --baud 921600 --start-immediately
 ```
 
 The recorder asks for a recording name before connecting, for example
@@ -88,7 +88,8 @@ The recorder asks for a recording name before connecting, for example
 and mirrored telemetry to `data/live/calibration_01/perg_telemetry.csv`, relative
 to the project directory regardless of the terminal's working directory.
 Existing recording folders are refused so previous captures are not overwritten.
-Files are created only after valid samples arrive. Stop with Ctrl+C.
+With the full logger, the recorder waits for LCD Start before creating the
+files. Tap LCD Stop to finish, or press Ctrl+C to exit manually.
 
 You can also supply the name directly:
 
@@ -118,10 +119,10 @@ state. Movement or noise alone never starts the timer. Each Start begins a new
 session, rather than resuming the previous one. Without a computer the button
 still controls the LCD session.
 
-For the button to control the saved capture as well, run:
+The saved capture follows the LCD buttons by default:
 
 ```bash
-python3 record_perg.py /dev/cu.usbserial-10 --start-on-button
+python3 record_perg.py /dev/cu.usbserial-10
 ```
 
 Enter a fresh recording name. Wait for `Ready: tap START on the LCD`, then tap
@@ -136,9 +137,9 @@ command. Bluetooth adds a small delay after your tap. The previous
 `--start-on-motion` flag is accepted as an alias, but now also waits for the
 button; automatic motion triggering has been replaced.
 
-Without the flag the recorder still captures idle samples and uses boot-relative
-timestamps, useful for calibration. LCD Start/Stop controls the timer but does
-not stop that continuous USB capture; use Ctrl+C to finish it.
+Use `--start-immediately` to capture idle samples with boot-relative timestamps
+or to record without a display. A Stop message from a connected display still
+ends the capture.
 
 Every received sample is saved; the terminal shows every 100th raw sample.
 The USB-only sketch produces a telemetry file containing just the header.
@@ -255,7 +256,7 @@ Raw sample CSVs contain:
 
 | Column | Meaning |
 | --- | --- |
-| `time_us` | ESP32 microseconds since boot, or since LCD Start with `--start-on-button`; not wall-clock time |
+| `time_us` | ESP32 microseconds since LCD Start by default, or since boot with `--start-immediately` |
 | `adc_value` | Raw 12-bit ADC reading (0–4095), not calibrated voltage or force |
 
 Telemetry CSVs contain

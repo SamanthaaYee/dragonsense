@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -99,7 +99,7 @@ class RecorderTests(unittest.TestCase):
                     self.assertEqual(recorder.choose_recording_dir(), Path(tmp) / "new")
             self.assertEqual((original / "perg_data.csv").read_text(), "original")
 
-    def test_button_records_only_session_and_closes_both_files(self):
+    def test_default_waits_for_display_start_after_prompt_and_stops(self):
         class Stream:
             def __init__(self):
                 self.lines = iter(
@@ -139,13 +139,13 @@ class RecorderTests(unittest.TestCase):
                 patch.object(recorder.serial, "Serial", return_value=stream),
                 patch.object(recorder.time, "sleep"),
                 patch.object(recorder, "wait_for_sample", return_value=[500, 1870]),
-                patch(
-                    "sys.argv",
-                    ["record_perg.py", "fake", "--name", "test", "--start-on-button"],
-                ),
-                contextlib.redirect_stdout(io.StringIO()),
+                patch("sys.argv", ["record_perg.py", "fake"]),
+                patch("builtins.input", return_value="test"),
+                contextlib.redirect_stdout(io.StringIO()) as output,
             ):
                 recorder.main()
+            self.assertIn("Ready: tap START on the LCD", output.getvalue())
+            self.assertIn("LCD STOP received", output.getvalue())
             with (Path(tmp) / "test/perg_data.csv").open() as f:
                 self.assertEqual(
                     list(csv.DictReader(f)), [{"time_us": "500", "adc_value": "1900"}]
@@ -155,6 +155,29 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(stream.commands, [b"A"])
         self.assertTrue(stream.closed)
         self.assertEqual(next(stream.lines), b"3500,1950\n")
+
+    def test_start_immediately_skips_arming_and_still_honors_stop(self):
+        stream = Mock()
+        stream.read_until.side_effect = [
+            b"boot\n",
+            b"1000,1870\n",
+            b"session_stop,2000\n",
+        ]
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(recorder, "OUTPUT_DIR", Path(tmp)),
+            patch.object(recorder.serial, "Serial", return_value=stream),
+            patch.object(recorder.time, "sleep"),
+            patch("sys.argv", ["record_perg.py", "fake", "--name", "test", "--start-immediately"]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            recorder.main()
+            with (Path(tmp) / "test/perg_data.csv").open() as f:
+                self.assertEqual(
+                    list(csv.DictReader(f)), [{"time_us": "1000", "adc_value": "1870"}]
+                )
+        stream.write.assert_not_called()
+        stream.close.assert_called_once()
 
     def test_arming_retry_stops_after_readiness(self):
         class Stream:

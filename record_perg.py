@@ -2,7 +2,8 @@
 Perg Hall sensor recorder.
 
 Reads CSV lines ("time_us,adc_value") streamed by perg_logger.ino or
-perg_full_logger.ino and saves them to data/live/NAME/perg_data.csv until Ctrl+C.
+perg_full_logger.ino and saves them to data/live/NAME/perg_data.csv. By default,
+the display's Start and Stop buttons control the capture.
 The full logger also mirrors its Bluetooth telemetry over USB. Tagged
 telemetry lines are saved to data/live/NAME/perg_telemetry.csv with the ESP32 timestamp,
 RPM, pace, distance, Hall voltage, pulse period, elapsed time, and watts.
@@ -18,8 +19,8 @@ Usage:
     python3 record_perg.py                 # auto-detect the ESP32 port
     python3 record_perg.py /dev/cu.usbserial-210
     python3 record_perg.py --name calibration_01
-    python3 record_perg.py --start-on-button
-    python3 record_perg.py /dev/cu.usbserial-10 --baud 921600  # original sketch
+    python3 record_perg.py --start-immediately  # record without a display
+    python3 record_perg.py /dev/cu.usbserial-10 --baud 921600 --start-immediately
 
 Requires pyserial:  python3 -m pip install pyserial
 (The package is named "pyserial" but is imported as "serial".)
@@ -66,8 +67,10 @@ PRINT_EVERY = 100
 BAR_WIDTH = 50
 
 
-def choose_recording_dir(name=None):
+def choose_recording_dir(name=None, *, output_dir=None):
     """Choose a new named capture without replacing an existing folder."""
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
     supplied_name = name is not None
     while True:
         if not supplied_name:
@@ -78,10 +81,10 @@ def choose_recording_dir(name=None):
         name = name.strip()
         if not name or name in (".", "..") or any(c in name for c in "/\\"):
             error = "Enter a recording name without path separators."
-        elif (OUTPUT_DIR / name).exists():
+        elif (output_dir / name).exists():
             error = f"Recording '{name}' already exists. Choose a different name."
         else:
-            return OUTPUT_DIR / name
+            return output_dir / name
         if supplied_name:
             sys.exit(error)
         print(error)
@@ -177,7 +180,8 @@ def wait_for_session_start(ser):
                 raise RuntimeError(
                     "No session_ready reply after repeated attempts. Check the "
                     "sensor ESP32's USB connection and confirm it has the updated "
-                    "Start/Stop perg_full_logger sketch."
+                    "Start/Stop perg_full_logger sketch. For USB-only recording, "
+                    "use --start-immediately."
                 )
             if now >= next_arm_attempt:
                 # Arming is idempotent. Retry only before readiness; never reset
@@ -218,17 +222,29 @@ def main():
     )
     parser.add_argument("--name", help="new recording name; prompts if omitted")
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="parent folder for recordings (default: data/live in the project)",
+    )
+    start_mode = parser.add_mutually_exclusive_group()
+    start_mode.add_argument(
         "--start-on-button",
         "--start-on-motion",
         dest="session_control",
         action="store_true",
-        help="LCD Start/Stop controls capture with session-relative timestamps "
-        "(--start-on-motion is a legacy alias; motion no longer starts the timer)",
+        help="wait for LCD Start and use session-relative timestamps (default)",
     )
+    start_mode.add_argument(
+        "--start-immediately",
+        dest="session_control",
+        action="store_false",
+        help="record as soon as USB data arrives, useful without a display",
+    )
+    parser.set_defaults(session_control=True)
     args = parser.parse_args()
     if args.baud <= 0:
         parser.error("--baud must be positive")
-    recording_dir = choose_recording_dir(args.name)
+    recording_dir = choose_recording_dir(args.name, output_dir=args.output_dir)
     filename = recording_dir / "perg_data.csv"
     telemetry_filename = recording_dir / "perg_telemetry.csv"
     port = args.port or find_port()
@@ -270,7 +286,7 @@ def main():
             open(filename, "x", newline="") as file,
             open(telemetry_filename, "x", newline="") as telemetry_file,
         ):
-            print(f"Recording to {filename}... press Ctrl+C to stop")
+            print(f"Recording to {filename}... tap LCD Stop or press Ctrl+C to finish")
             print(f"Bluetooth telemetry mirrored over USB goes to {telemetry_filename}")
             writer = csv.writer(file)
             telemetry_writer = csv.writer(telemetry_file)
@@ -284,10 +300,10 @@ def main():
                 raw = ser.read_until(b"\n", size=MAX_LINE_BYTES)
                 if not raw.endswith(b"\n"):
                     continue
-                if args.session_control and raw.startswith(b"session_stop,"):
+                if raw.startswith(b"session_stop,"):
                     try:
-                        int(raw.decode("ascii").strip().split(",")[1])
-                    except (ValueError, UnicodeDecodeError, IndexError):
+                        int(raw.split(b",", 1)[1])
+                    except ValueError:
                         continue
                     print(f"\nLCD STOP received. Saved {count} samples to {filename}")
                     print(

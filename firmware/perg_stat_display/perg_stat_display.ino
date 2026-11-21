@@ -64,10 +64,12 @@ int16_t touchCal[4]; // raw coordinates at screen (20,20) and (300,220)
 // Title
 const int TITLE_Y = 8;
 // Big values: RPM left, PACE right (font 7: 7-segment digits + ':')
+const int BIG_TEXT_Y_OFFSET = 14;
+const int BIG_FIELD_HEIGHT = BIG_TEXT_Y_OFFSET + 48; // Font 7 is 48 px tall.
 const int RPM_LABEL_X = 20,  RPM_LABEL_Y = 40;
-const int RPM_X = 20,  RPM_Y = 58, RPM_W = 130, RPM_H = 60;
+const int RPM_X = 20,  RPM_Y = 58, RPM_W = 130;
 const int PACE_LABEL_X = 180, PACE_LABEL_Y = 40;
-const int PACE_X = 180, PACE_Y = 58, PACE_W = 120, PACE_H = 60;
+const int PACE_X = 180, PACE_Y = 58, PACE_W = 140; // Four 32 px digits and a 12 px colon.
 
 // Bottom strip, two rows of (label font 2, value font 4):
 // row 1: DISTANCE, SPM, PEAK      row 2: TIME, WATTS, VOLT (right-aligned)
@@ -198,11 +200,11 @@ void drawStatic() {
 }
 
 // Big 7-segment value (digits + ':' only), erased with its fillRect box.
-void drawBig(int x, int y, int w, int h, const char *text) {
+void drawBig(int x, int y, int w, const char *text) {
   tft.setTextColor(COL_VALUE, COL_BG);
   tft.setTextDatum(TL_DATUM);
-  tft.fillRect(x, y, w, h, COL_BG);
-  tft.drawString(text, x, y + h / 2 - 16, 7);
+  tft.fillRect(x, y, w, BIG_FIELD_HEIGHT, COL_BG);
+  tft.drawString(text, x, y + BIG_TEXT_Y_OFFSET, 7);
 }
 
 // Small font-4 value, erased with a fixed-width box before drawing.
@@ -287,7 +289,7 @@ void handleLine() {
   // RPM (integer, font 7)
   char text[16];
   snprintf(text, sizeof(text), "%d", (int)(rpm + 0.5f));
-  drawBig(RPM_X, RPM_Y, RPM_W, RPM_H, text);
+  drawBig(RPM_X, RPM_Y, RPM_W, text);
 
   // Pace as mm:ss per 500 m. paceS == 0 means "not moving" -> "--:--"
   // (basic font, because the 7-segment font has no '-' glyph).
@@ -296,12 +298,12 @@ void handleLine() {
     int minutes = rounded / 60;
     int seconds = rounded % 60;
     snprintf(text, sizeof(text), "%d:%02d", minutes, seconds);
-    drawBig(PACE_X, PACE_Y, PACE_W, PACE_H, text);
+    drawBig(PACE_X, PACE_Y, PACE_W, text);
   } else {
     tft.setTextColor(COL_TEXT, COL_BG);
     tft.setTextDatum(TL_DATUM);
-    tft.fillRect(PACE_X, PACE_Y, PACE_W, PACE_H, COL_BG);
-    tft.drawString("--:--", PACE_X, PACE_Y + PACE_H / 2 - 8, 4);
+    tft.fillRect(PACE_X, PACE_Y, PACE_W, BIG_FIELD_HEIGHT, COL_BG);
+    tft.drawString("--:--", PACE_X, PACE_Y + 22, 4);
   }
 
   // Distance
