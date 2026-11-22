@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Perg Workout</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #15181d;
+    --muted: #5d6675;
+    --line: #d9dde3;
+    --accent: #1f6f43;
+    --accent-text: #ffffff;
+    --error: #b3261e;
+    --ok: #1f6f43;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101215;
+      --card: #1a1d22;
+      --text: #eceef1;
+      --muted: #9aa3b1;
+      --line: #2e333b;
+      --accent: #3fa66b;
+      --accent-text: #08130c;
+      --error: #ff8a80;
+      --ok: #7ed79f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(32px + env(safe-area-inset-bottom, 0px));
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 16px; }
+  .notice {
+    border: 1px solid var(--error);
+    color: var(--error);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 0 0 16px;
+  }
+  ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .piece {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .piece-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .piece-number { font-weight: 600; min-width: 4.5em; }
+  .kind { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .kind button {
+    border: 0;
+    border-radius: 0;
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+  }
+  .kind button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .spacer { flex: 1; }
+  .icon {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 1.2rem;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  input {
+    font: inherit;
+    font-size: 1.1rem;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    width: 100%;
+  }
+  input[aria-invalid="true"] { border-color: var(--error); }
+  button { font: inherit; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .add {
+    width: 100%;
+    margin: 10px 0 0;
+    padding: 10px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text);
+  }
+  .summary { color: var(--muted); margin: 14px 0 0; }
+  .error { color: var(--error); min-height: 1.45em; margin: 6px 0 0; }
+  .actions { display: grid; gap: 8px; margin-top: 12px; }
+  .primary, .secondary { padding: 14px; border-radius: 12px; font-weight: 600; }
+  .primary { border: 0; background: var(--accent); color: var(--accent-text); }
+  .secondary { border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  .status { min-height: 1.45em; margin: 12px 0 0; }
+  .status.ok { color: var(--ok); }
+  .status.fail { color: var(--error); }
+  details { margin-top: 20px; color: var(--muted); font-size: 0.85rem; }
+  code { word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Perg workout</h1>
+  <p class="lede">Build pieces and rests, send them to the Perg display, then tap START on the Perg.</p>
+  <p class="notice" id="unsupported" hidden>
+    This browser can't use Bluetooth. On iPhone, open this page in the Bluefy app.
+    On a computer or Android, use Chrome.
+  </p>
+
+  <ol id="pieces"></ol>
+  <button class="add" id="add" type="button">+ Add piece</button>
+
+  <p class="summary" id="summary"></p>
+  <p class="error" id="error" role="alert"></p>
+
+  <div class="actions">
+    <button class="primary" id="send" type="button">Send to Perg</button>
+    <button class="secondary" id="clear" type="button">Clear Perg workout</button>
+  </div>
+  <p class="status" id="status" aria-live="polite"></p>
+
+  <details>
+    <summary>Details</summary>
+    <p>Line sent to the display: <code id="line"></code></p>
+    <p>Time: <code>m:ss</code> or seconds. Distance: whole metres. The rest after the last piece is not used.</p>
+  </details>
+</main>
+
+<template id="piece-template">
+  <li class="piece">
+    <div class="piece-head">
+      <span class="piece-number"></span>
+      <div class="kind" role="group" aria-label="Piece type">
+        <button type="button" data-kind="T">Time</button>
+        <button type="button" data-kind="D">Distance</button>
+      </div>
+      <span class="spacer"></span>
+      <button class="icon" type="button" data-action="duplicate" aria-label="Duplicate piece">⧉</button>
+      <button class="icon" type="button" data-action="remove" aria-label="Remove piece">✕</button>
+    </div>
+    <div class="fields">
+      <label><span data-role="target-label"></span>
+        <input data-field="target" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
+      <label><span data-role="rest-label">Rest after</span>
+        <input data-field="rest" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="0:00">
+      </label>
+    </div>
+  </li>
+</template>
+
+<script src="workout.js"></script>
+<script>
+'use strict';
+(function () {
+  const W = window.PergWorkout;
+  // Bluetooth transport only; the line format lives in workout.js.
+  // UUIDs match firmware/perg_freenove_esp32_s3_display (docs/workout_push.md).
+  const SERVICE_UUID = 'be7a1000-7c2d-4e58-a608-dbea31094d61';
+  const WORKOUT_UUID = 'be7a1003-7c2d-4e58-a608-dbea31094d61';
+  const CHUNK_BYTES = 20; // fits the default BLE MTU, so no negotiation is assumed
+  const STORAGE_KEY = 'perg-workout-rows-v1';
+  const DEFAULT_ROWS = Object.freeze([Object.freeze({ kind: 'T', target: '4:00', rest: '1:00' })]);
+
+  const el = {
+    pieces: document.getElementById('pieces'),
+    template: document.getElementById('piece-template'),
+    add: document.getElementById('add'),
+    summary: document.getElementById('summary'),
+    error: document.getElementById('error'),
+    send: document.getElementById('send'),
+    clear: document.getElementById('clear'),
+    status: document.getElementById('status'),
+    line: document.getElementById('line'),
+    unsupported: document.getElementById('unsupported'),
+  };
+  const bluetoothAvailable = Boolean(navigator.bluetooth);
+  let rows = loadRows();
+  let busy = false;
+
+  // ---------------- State ----------------
+
+  function isRow(value) {
+    return value && (value.kind === 'T' || value.kind === 'D') &&
+      typeof value.target === 'string' && typeof value.rest === 'string';
+  }
+
+  function loadRows() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (Array.isArray(saved) && saved.length <= W.LIMITS.maxPieces && saved.every(isRow)) {
+        return saved.map((row) => ({ kind: row.kind, target: row.target, rest: row.rest }));
+      }
+    } catch (error) {
+      // Storage unavailable or corrupt: start from the default workout.
+    }
+    return DEFAULT_ROWS.map((row) => ({ ...row }));
+  }
+
+  function saveRows() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+    } catch (error) {
+      // Remembering the workout is a convenience only.
+    }
+  }
+
+  function setRows(next) {
+    rows = next;
+    saveRows();
+  }
+
+  function toPiece(row) {
+    const target = row.kind === 'T' ? W.parseDuration(row.target) : W.parseDistance(row.target);
+    const rest = row.rest.trim() === '' ? 0 : W.parseDuration(row.rest);
+    return { kind: row.kind, target, rest };
+  }
+
+  // -> { line, error, pieces }
+  function currentWorkout() {
+    if (rows.length === 0) return { line: null, error: 'Add at least one piece.', pieces: [] };
+    const pieces = rows.map(toPiece);
+    return { ...W.encode(pieces), pieces };
+  }
+
+  // ---------------- Rendering ----------------
+
+  function renderRows() {
+    const items = rows.map((row, index) => {
+      const item = el.template.content.firstElementChild.cloneNode(true);
+      item.dataset.index = String(index);
+      item.querySelector('.piece-number').textContent = `Piece ${index + 1}`;
+      item.querySelectorAll('[data-kind]').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.kind === row.kind));
+      });
+      const target = item.querySelector('[data-field="target"]');
+      target.value = row.target;
+      target.placeholder = row.kind === 'T' ? '4:00' : '500';
+      target.inputMode = row.kind === 'T' ? 'text' : 'numeric';
+      item.querySelector('[data-role="target-label"]').textContent =
+        row.kind === 'T' ? 'Time (m:ss)' : 'Distance (m)';
+      item.querySelector('[data-field="rest"]').value = row.rest;
+      if (index === rows.length - 1) {
+        item.querySelector('[data-role="rest-label"]').textContent = 'Rest after (not used)';
+      }
+      return item;
+    });
+    el.pieces.replaceChildren(...items);
+    el.add.disabled = rows.length >= W.LIMITS.maxPieces;
+    renderValidation();
+  }
+
+  function summarize(pieces) {
+    const work = pieces.filter((p) => p.kind === 'T').reduce((sum, p) => sum + p.target, 0);
+    const metres = pieces.filter((p) => p.kind === 'D').reduce((sum, p) => sum + p.target, 0);
+    const rest = pieces.slice(0, -1).reduce((sum, p) => sum + p.rest, 0);
+    const parts = [];
+    if (work) parts.push(W.formatDuration(work));
+    if (metres) parts.push(`${metres} m`);
+    const count = `${pieces.length} piece${pieces.length === 1 ? '' : 's'}`;
+    return `${count} · ${parts.join(' + ')} work · ${W.formatDuration(rest)} rest`;
+  }
+
+  function renderValidation() {
+    const workout = currentWorkout();
+    el.error.textContent = workout.error || '';
+    el.summary.textContent = workout.error ? '' : summarize(workout.pieces);
+    el.line.textContent = workout.line || '—';
+    el.pieces.querySelectorAll('.piece').forEach((item) => {
+      const piece = workout.pieces[Number(item.dataset.index)];
+      item.querySelector('[data-field="target"]').setAttribute('aria-invalid', String(piece.target === null));
+      item.querySelector('[data-field="rest"]').setAttribute('aria-invalid', String(piece.rest === null));
+    });
+    el.send.disabled = busy || !bluetoothAvailable || Boolean(workout.error);
+    el.clear.disabled = busy || !bluetoothAvailable;
+  }
+
+  function setStatus(text, tone) {
+    el.status.textContent = text;
+    el.status.className = `status${tone ? ` ${tone}` : ''}`;
+  }
+
+  function setBusy(value) {
+    busy = value;
+    renderValidation();
+  }
+
+  // ---------------- Editing ----------------
+
+  el.pieces.addEventListener('input', (event) => {
+    const field = event.target.dataset.field;
+    const item = event.target.closest('.piece');
+    if (!field || !item) return;
+    const index = Number(item.dataset.index);
+    setRows(rows.map((row, i) => (i === index ? { ...row, [field]: event.target.value } : row)));
+    renderValidation();
+  });
+
+  el.pieces.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    const item = event.target.closest('.piece');
+    if (!button || !item) return;
+    const index = Number(item.dataset.index);
+    if (button.dataset.kind) {
+      const kind = button.dataset.kind;
+      if (rows[index].kind === kind) return;
+      const target = kind === 'T' ? '4:00' : '500';
+      setRows(rows.map((row, i) => (i === index ? { ...row, kind, target } : row)));
+    } else if (button.dataset.action === 'remove') {
+      setRows(rows.filter((_, i) => i !== index));
+    } else if (button.dataset.action === 'duplicate' && rows.length < W.LIMITS.maxPieces) {
+      setRows([...rows.slice(0, index + 1), { ...rows[index] }, ...rows.slice(index + 1)]);
+    } else {
+      return;
+    }
+    renderRows();
+  });
+
+  el.add.addEventListener('click', () => {
+    if (rows.length >= W.LIMITS.maxPieces) return;
+    const last = rows[rows.length - 1] || DEFAULT_ROWS[0];
+    setRows([...rows, { ...last }]);
+    renderRows();
+  });
+
+  // ---------------- Bluetooth ----------------
+
+  function chunks(text) {
+    const bytes = new TextEncoder().encode(text);
+    const parts = [];
+    for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+      parts.push(bytes.slice(offset, offset + CHUNK_BYTES));
+    }
+    return parts;
+  }
+
+  function write(characteristic, bytes) {
+    // Acknowledged writes keep chunks ordered; Bluefy may only offer writeValue.
+    return characteristic.writeValueWithResponse
+      ? characteristic.writeValueWithResponse(bytes)
+      : characteristic.writeValue(bytes);
+  }
+
+  function explainFailure(error, stage) {
+    const name = error && error.name;
+    if (stage === 'choose' && name === 'NotFoundError') return 'No display selected.';
+    if (stage === 'connect' && name === 'NotFoundError') {
+      return "This display doesn't accept workouts yet. Upload the latest display firmware.";
+    }
+    if (name === 'NetworkError') return 'Lost the connection to the display. Move closer and try again.';
+    if (name === 'SecurityError') return 'Bluetooth needs this page to be opened over https.';
+    return `Something went wrong: ${(error && error.message) || error}`;
+  }
+
+  // Sends one workout line, then reads back the display's confirmation.
+  async function push(line, successText) {
+    setBusy(true);
+    let device = null;
+    let stage = 'choose';
+    try {
+      setStatus('Choose the Perg display (perg-freenove-s3)…');
+      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+      stage = 'connect';
+      setStatus('Connecting…');
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      const characteristic = await service.getCharacteristic(WORKOUT_UUID);
+      stage = 'send';
+      setStatus('Sending…');
+      for (const part of chunks(`${line}\n`)) {
+        await write(characteristic, part);
+      }
+      stage = 'confirm';
+      const reply = new TextDecoder().decode(await characteristic.readValue());
+      const status = W.parseStatus(reply);
+      if (W.confirms(line, reply)) {
+        setStatus(successText, 'ok');
+      } else if (status.state === 'error') {
+        setStatus(W.describeDisplayError(status.code), 'fail');
+      } else {
+        setStatus(`The display didn't confirm the workout (${reply}). Try again.`, 'fail');
+      }
+    } catch (error) {
+      setStatus(explainFailure(error, stage), stage === 'choose' ? '' : 'fail');
+    } finally {
+      if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+      setBusy(false);
+    }
+  }
+
+  el.send.addEventListener('click', () => {
+    const workout = currentWorkout();
+    if (workout.error || busy) return;
+    const count = workout.pieces.length;
+    push(workout.line, `Sent ${count} piece${count === 1 ? '' : 's'}. Tap START on the Perg to begin.`);
+  });
+
+  el.clear.addEventListener('click', () => {
+    if (busy) return;
+    push(W.encode([]).line, 'Workout cleared on the Perg.');
+  });
+
+  el.unsupported.hidden = bluetoothAvailable;
+  renderRows();
+})();
+</script>
+</body>
+</html>

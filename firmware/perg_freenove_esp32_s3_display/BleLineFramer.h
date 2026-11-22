@@ -5,7 +5,11 @@
 // BLE writes are packets, not lines. A CSV line may span several 20-byte
 // packets, and a packet may contain more than one line. Drop oversized lines
 // through their newline so a damaged suffix is never interpreted as telemetry.
-class BleLineFramer {
+// Capacity includes the terminator, so the longest line is Capacity - 1.
+template <size_t Capacity>
+class BasicLineFramer {
+  static_assert(Capacity > 1, "a line needs room for the terminator");
+
  public:
   void reset() { used = 0; overflow = false; }
   template <typename Sink>
@@ -23,7 +27,10 @@ class BleLineFramer {
     }
   }
  private:
-  char text[112] = {};
+  char text[Capacity] = {};
   size_t used = 0;
   bool overflow = false;
 };
+
+// Telemetry lines from the logger.
+using BleLineFramer = BasicLineFramer<112>;

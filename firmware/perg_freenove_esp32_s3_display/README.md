@@ -47,6 +47,30 @@ The original `perg_full_logger` uses Bluetooth Classic and cannot communicate
 directly with the S3. Upload the separate BLE logger for this screen, or use
 the original logger and original CYD together.
 
+## Interval workouts from a phone
+
+The display accepts a workout of pieces and rests from the
+[workout page](../../web/index.html) over Bluetooth. The full behavior and
+wire format are in [docs/workout_push.md](../../docs/workout_push.md).
+
+1. Upload this sketch, keeping `Workout.h` and `BleLineFramer.h` beside it.
+   The loggers do not change.
+2. Host the `web/` folder on an HTTPS static host such as GitHub Pages.
+   Web Bluetooth does not work from a plain `http://` address.
+3. On iPhone, open the page in **Bluefy** (Safari has no Web Bluetooth). On a
+   computer or Android, use Chrome. Build the workout and tap **Send to Perg**.
+   Choose `perg-freenove-s3`. The page reports when the display confirms.
+4. The top-left of the screen shows `READY 5 PCS`. Tap START: it counts
+   down each piece (`P2/5 1:23` or `P2/5 245m`) and rest (`REST 0:45`), then
+   stops the session and shows `DONE`. Tapping STOP mid-workout returns to READY.
+
+The workout is saved on the display and survives a reset. **Clear Perg
+workout** removes it. A new workout is refused while one is running.
+
+The phone connects alongside the logger and disconnects after sending. This
+two-connection behavior is not yet confirmed on hardware: check that
+telemetry continues while a phone sends.
+
 ## Behavior and checks
 
 - Same RPM, recent pace per 500 m, distance, SPM, peak watts, elapsed time,
