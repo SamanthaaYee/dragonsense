@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ArchivedDataTests(unittest.TestCase):
     def test_pace_collection_integrity_and_recorded_timing_findings(self):
-        base = ROOT / "data/sessions/2026-11-15_pace_based"
+        base = ROOT / "data/WattageTests/2026-11-15_pace_based"
         manifest = json.loads((base / "manifest.json").read_text())
         for session in manifest["recordings"]:
             for filename, expected in session["files"].items():
@@ -50,7 +50,7 @@ class ArchivedDataTests(unittest.TestCase):
                         )
 
     def test_recording_checksums_and_sample_counts(self):
-        base = ROOT / "data/sessions/2026-11-09"
+        base = ROOT / "data/WattageTests/2026-11-09"
         manifest = json.loads((base / "manifest.json").read_text())
         for session in manifest["recordings"]:
             for filename, expected in session["files"].items():

@@ -168,7 +168,10 @@ class RecorderTests(unittest.TestCase):
             patch.object(recorder, "OUTPUT_DIR", Path(tmp)),
             patch.object(recorder.serial, "Serial", return_value=stream),
             patch.object(recorder.time, "sleep"),
-            patch("sys.argv", ["record_perg.py", "fake", "--name", "test", "--start-immediately"]),
+            patch(
+                "sys.argv",
+                ["record_perg.py", "fake", "--name", "test", "--start-immediately"],
+            ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             recorder.main()
