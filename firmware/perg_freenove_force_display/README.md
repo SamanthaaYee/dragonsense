@@ -1,7 +1,7 @@
 # Freenove ESP32-S3 force display
 
 1. Open `perg_freenove_force_display.ino` in Arduino IDE. Keep
-   `build_opt.h` and `BleLineFramer.h` in the same folder and install
+   `build_opt.h`, `BleLineFramer.h`, and `Workout.h` in the same folder and install
    TFT_eSPI by Bodmer. The sketch uses the Freenove FNK0104B display and touch
    configuration.
 2. Select **ESP32S3 Dev Module**, **Flash Size → 16MB** (check your board),
@@ -25,3 +25,12 @@ The sketch draws the entire screen into a 320×240, 8-bit frame buffer, then
 pushes the frame to the LCD. The logger still supports the
 [original LCD sketch](<../Old Firmware/perg_freenove_esp32_s3_display/README.md>)
 and the existing USB recordings.
+
+## Optional interval workouts
+
+Open the [workout builder](../../web/index.html) from an HTTPS static host on
+a browser with Web Bluetooth, such as Bluefy on iPhone. Send a plan to
+`perg-force-display`. On the LCD, tap **WORKOUT OFF** to arm the plan, then
+tap **START**. The LCD sends **STOP** after the final interval. A subsequent
+session runs normally until you arm the plan again. See the
+[workout specification](../../docs/workout_push.md) for protocol and test details.

@@ -11,16 +11,23 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <atomic>
 #include <math.h>
 #include "BleLineFramer.h"
+#include "Workout.h"
+
+#if !defined(CONFIG_NIMBLE_ENABLED)
+#error "Workout connections require NimBLE on Arduino-ESP32 core 3.3.x."
+#endif
 
 // The combined sensor logger selects this display's force characteristic.
 const char *SERVICE_UUID = "be7a1000-7c2d-4e58-a608-dbea31094d61";
 const char *FORCE_TELEMETRY_UUID = "be7a1003-7c2d-4e58-a608-dbea31094d61";
 const char *COMMAND_UUID = "be7a1002-7c2d-4e58-a608-dbea31094d61";
+const char *WORKOUT_UUID = "be7a1004-7c2d-4e58-a608-dbea31094d61";
 TFT_eSPI tft;
 TFT_eSprite frame(&tft);
 BLECharacteristic *commandCharacteristic = nullptr;
@@ -31,21 +38,52 @@ struct ReceivedLine { uint32_t generation; char text[112]; };
 QueueHandle_t receivedLines = nullptr;
 BleLineFramer framer; // only the BLE callback task accesses this instance
 
+// Several centrals may connect: the logger plus a phone pushing a workout.
+// The logger is the connection that writes telemetry; only its link state
+// drives the "Waiting" screen. All BLE callbacks run on the NimBLE host task.
+constexpr uint16_t NO_CONNECTION = 0xFFFF; // BLE_HS_CONN_HANDLE_NONE
+std::atomic<uint16_t> loggerConnection{NO_CONNECTION};
+
+// Workout transport state. The framer and its connection are host-task only.
+// 243-255 character lines report "length"; longer lines are dropped (status RECV).
+BasicLineFramer<256> workoutFramer;
+uint16_t workoutConnection = NO_CONNECTION;
+QueueHandle_t receivedPlans = nullptr; // one pending workout::Plan
+// Pushes are refused while a session or workout runs, so a new plan never
+// starts mid-row. Set by loop() from telemetry and the runner.
+std::atomic<bool> pushBlocked{false};
+
 class DisplayServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *) override {
-    framer.reset();
-    linkGeneration.fetch_add(1);
-    linkConnected.store(true);
+  void onConnect(BLEServer *, ble_gap_conn_desc *) override {
+    // NimBLE stops advertising on connect; keep a slot open for a phone.
+    advertisePending.store(true);
   }
-  void onDisconnect(BLEServer *) override {
-    framer.reset();
-    linkConnected.store(false);
-    linkGeneration.fetch_add(1);
+  void onDisconnect(BLEServer *, ble_gap_conn_desc *desc) override {
+    if (desc->conn_handle == workoutConnection) {
+      workoutFramer.reset(); // never join two phones' partial lines
+      workoutConnection = NO_CONNECTION;
+    }
+    if (desc->conn_handle == loggerConnection.load()) {
+      loggerConnection.store(NO_CONNECTION);
+      framer.reset();
+      linkConnected.store(false);
+      linkGeneration.fetch_add(1);
+    }
     advertisePending.store(true);
   }
 };
 class TelemetryCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *characteristic) override {
+  void onWrite(BLECharacteristic *characteristic, ble_gap_conn_desc *desc) override {
+    const uint16_t logger = loggerConnection.load();
+    if (logger == NO_CONNECTION) {
+      // The first telemetry writer is the logger: start a new link generation.
+      loggerConnection.store(desc->conn_handle);
+      framer.reset();
+      linkGeneration.fetch_add(1);
+      linkConnected.store(true);
+    } else if (logger != desc->conn_handle) {
+      return; // only one logger drives the display
+    }
     String packet = characteristic->getValue();
     framer.feed((const uint8_t *)packet.c_str(), packet.length(), [](const char *line) {
       ReceivedLine item = {};
@@ -57,8 +95,40 @@ class TelemetryCallbacks : public BLECharacteristicCallbacks {
     });
   }
 };
+
+// Validates a complete workout line and hands it to loop(). Returns the
+// status the phone reads back. Runs in the BLE callback, so it must not block.
+String acceptWorkout(const char *line) {
+  using namespace workout;
+  if (pushBlocked.load()) return String("ERR,") + errorCode(Error::Busy);
+  const ParseResult result = parse(line);
+  if (result.error != Error::None) return String("ERR,") + errorCode(result.error);
+  if (!receivedPlans) return String("ERR,") + errorCode(Error::Busy);
+  xQueueOverwrite(receivedPlans, &result.plan);
+  char status[24];
+  snprintf(status, sizeof(status), "OK,%u,%08lx", (unsigned)result.plan.count,
+           (unsigned long)checksum(line));
+  return String(status);
+}
+
+class WorkoutCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *characteristic, ble_gap_conn_desc *desc) override {
+    if (desc->conn_handle != workoutConnection) {
+      workoutFramer.reset();
+      workoutConnection = desc->conn_handle;
+    }
+    String packet = characteristic->getValue();
+    String status = "RECV";
+    workoutFramer.feed((const uint8_t *)packet.c_str(), packet.length(),
+                       [&status](const char *line) { status = acceptWorkout(line); });
+    // NimBLE responds to the write after this returns, so a read that follows
+    // the final chunk always sees this status.
+    characteristic->setValue(status);
+  }
+};
 DisplayServerCallbacks serverCallbacks;
 TelemetryCallbacks telemetryCallbacks;
+WorkoutCallbacks workoutCallbacks;
 
 // Native FT6336U capacitive-touch coordinates; no resistive calibration.
 const uint8_t TOUCH_ADDR = 0x38;
@@ -98,6 +168,7 @@ void sendCommand(bool running) {
 }
 
 constexpr int BUTTON_X = 214, BUTTON_Y = 5, BUTTON_W = 96, BUTTON_H = 28;
+constexpr int WORKOUT_X = 10, WORKOUT_W = 194;
 constexpr int CURVE_POINTS = 32; // Matches StrokeForce::POINTS in the logger.
 constexpr uint16_t BG = 0x10A3;
 constexpr uint16_t PANEL = 0x21A6;
@@ -115,6 +186,57 @@ bool commandPending = false, requestedRunning = false;
 bool redraw = true;
 uint32_t commandSentMs = 0;
 String displayAddress;
+
+Preferences workoutPreferences;
+workout::Plan workoutPlan;
+workout::RunState workoutState;
+bool workoutArmed = false;
+
+void loadWorkout() {
+  if (!workoutPreferences.begin("perg", false)) return;
+  const String line = workoutPreferences.getString("workout", "");
+  const auto result = workout::parse(line.c_str());
+  if (result.error == workout::Error::None) workoutPlan = result.plan;
+}
+
+void applyWorkout(const workout::Plan &plan) {
+  workoutPlan = plan;
+  workoutState = {};
+  workoutArmed = false;
+  if (workoutPreferences.isKey("workout") && plan.count == 0) {
+    if (!workoutPreferences.remove("workout")) Serial.println("Could not clear stored workout");
+  } else if (plan.count) {
+    char line[workout::MAX_LINE + 1];
+    if (workout::format(plan, line, sizeof(line)) &&
+        workoutPreferences.putString("workout", line) == 0) {
+      Serial.println("Workout will be lost on reset");
+    }
+  }
+  redraw = true;
+}
+
+void requestSession(bool running) {
+  requestedRunning = running;
+  commandPending = redraw = true;
+  pushBlocked.store(true);
+  commandSentMs = millis();
+  sendCommand(running);
+}
+
+void updateWorkout() {
+  if (workoutArmed) {
+    const bool wasInProgress = workout::inProgress(workoutState.phase);
+    workoutState = workout::advance(workoutPlan, workoutState,
+                                    {sessionRunning, stats.elapsed, stats.distance});
+    if (!sessionRunning && wasInProgress) workoutArmed = false;
+    if (workoutState.phase == workout::Phase::Finishing && sessionRunning && !commandPending) {
+      requestSession(false);
+    }
+  } else if (sessionRunning) {
+    workoutState = {};
+  }
+  pushBlocked.store(sessionRunning || commandPending);
+}
 
 void drawText(const char *text, int x, int y, int font, uint16_t color = TFT_WHITE) {
   frame.setTextColor(color);
@@ -170,10 +292,31 @@ void formatTime(char *text, size_t size, uint32_t seconds) {
            (unsigned long)(seconds % 60));
 }
 
+void drawWorkoutStatus() {
+  if (!workoutPlan.count) {
+    drawText("PERG", 10, 7, 4);
+    return;
+  }
+  const auto banner = workout::describe(workoutPlan, workoutState,
+                                       {sessionRunning, stats.elapsed, stats.distance});
+  const bool canArm = sessionKnown && !sessionRunning && !commandPending;
+  const bool showStatus = workoutArmed || banner.phase == workout::Phase::Finished;
+  const char *label = showStatus ? banner.text : "WORKOUT OFF";
+  if (canArm) {
+    frame.fillRoundRect(WORKOUT_X, BUTTON_Y, WORKOUT_W, BUTTON_H, 5, PANEL);
+  }
+  frame.setTextDatum(MC_DATUM);
+  drawText(label, WORKOUT_X + WORKOUT_W / 2, BUTTON_Y + BUTTON_H / 2 - 1, 2,
+           showStatus ? ACCENT : MUTED);
+  frame.setTextDatum(TL_DATUM);
+  const int width = (int)(WORKOUT_W * banner.fraction);
+  if (width > 0) frame.drawFastHLine(WORKOUT_X, 31, width, ACCENT);
+}
+
 void drawDashboard() {
   frame.fillSprite(BG);
   frame.setTextDatum(TL_DATUM);
-  drawText("PERG", 10, 7, 4);
+  drawWorkoutStatus();
 
   const uint16_t buttonColor = !sessionKnown || commandPending ? PANEL :
                                sessionRunning ? TFT_MAROON : TFT_DARKGREEN;
@@ -236,6 +379,7 @@ bool readStats(const char *line) {
   sessionRunning = running == 1;
   sessionKnown = true;
   if (commandPending && sessionRunning == requestedRunning) commandPending = false;
+  updateWorkout();
   redraw = true;
   return true;
 }
@@ -277,12 +421,14 @@ void pollTouch() {
   if (!pressedMs) pressedMs = millis();
   if (millis() - pressedMs < 60) return;
   held = true;
-  if (!sessionKnown || commandPending || x < BUTTON_X || x >= BUTTON_X + BUTTON_W ||
-      y < BUTTON_Y || y >= BUTTON_Y + BUTTON_H) return;
-  requestedRunning = !sessionRunning;
-  commandPending = redraw = true;
-  commandSentMs = millis();
-  sendCommand(requestedRunning);
+  if (!sessionKnown || commandPending || y < BUTTON_Y || y >= BUTTON_Y + BUTTON_H) return;
+  if (workoutPlan.count && !sessionRunning && x >= WORKOUT_X && x < WORKOUT_X + WORKOUT_W) {
+    workoutArmed = !workoutArmed;
+    workoutState = {};
+    redraw = true;
+  } else if (x >= BUTTON_X && x < BUTTON_X + BUTTON_W) {
+    requestSession(!sessionRunning);
+  }
 }
 
 void setup() {
@@ -298,8 +444,10 @@ void setup() {
     for (;;) delay(1000);
   }
   initTouch();
+  loadWorkout();
   receivedLines = xQueueCreate(12, sizeof(ReceivedLine));
-  if (!receivedLines) {
+  receivedPlans = xQueueCreate(1, sizeof(workout::Plan));
+  if (!receivedLines || !receivedPlans) {
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_RED);
     tft.drawString("Receive queue failed; reset", 10, 100, 2);
@@ -318,6 +466,10 @@ void setup() {
   commandCharacteristic = service->createCharacteristic(
       COMMAND_UUID, BLECharacteristic::PROPERTY_NOTIFY);
   commandCharacteristic->addDescriptor(new BLE2902());
+  BLECharacteristic *workoutCharacteristic = service->createCharacteristic(
+      WORKOUT_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  workoutCharacteristic->setCallbacks(&workoutCallbacks);
+  workoutCharacteristic->setValue("READY");
   service->start();
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
@@ -356,6 +508,11 @@ void loop() {
       sendCommand(requestedRunning);
       commandSentMs = millis();
     }
+  }
+
+  workout::Plan pushed;
+  if (!pushBlocked.load() && xQueueReceive(receivedPlans, &pushed, 0) == pdTRUE) {
+    applyWorkout(pushed);
   }
 
   if (redraw && now - lastFrameMs >= 50) {

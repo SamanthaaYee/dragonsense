@@ -43,6 +43,8 @@ firmware/
   Old Firmware/            Earlier loggers, displays, and foot-sensor sketches
   ble_mac_address/         BLE address lookup sketch
   perg_signal_player/      DAC waveform player (separate board role)
+web/                       Workout page: push intervals to the Freenove display
+                           over Bluetooth (spec: docs/workout_push.md)
 record_perg.py             USB sample and telemetry recorder
 analyze_perg.py            Offline waveform and stroke analysis
 replay_lin_probe.py        Replay, synthetic trials, optional LIN decoding
