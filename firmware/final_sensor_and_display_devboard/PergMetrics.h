@@ -18,6 +18,24 @@ class PergMetrics {
   float rpm = 0, periodMs = 0, strokeRate = 0;
   uint32_t pulses = 0;
 
+  bool latestStroke(uint32_t &start, uint32_t &end) const {
+    if (catchCount < 2) return false;
+    start = catches[catchCount - 2];
+    end = catches[catchCount - 1];
+    return true;
+  }
+
+  bool latestRevolution(uint32_t &midpoint, float &turnRpm) const {
+    if (raw.count < 9) return false;
+    const Point &last = raw.at(raw.count - 1);
+    const Point &first = raw.at(raw.count - 9);
+    const uint32_t duration = last.time - first.time;
+    // Time a full revolution to cancel uneven magnet spacing.
+    midpoint = first.time + duration / 2;
+    turnRpm = 60000000.0f / duration;
+    return true;
+  }
+
   void sample(uint32_t time, int adc) {
     tick(time);
     if (adc < MIDLINE - HYSTERESIS) armed = true;

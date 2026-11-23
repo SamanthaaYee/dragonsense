@@ -13,7 +13,7 @@ class BleFramingFirmwareTests(unittest.TestCase):
     def test_fragmentation_overflow_and_reconnect(self):
         header = (
             Path(__file__).resolve().parents[1]
-            / "firmware/perg_freenove_esp32_s3_display/BleLineFramer.h"
+            / "firmware/Old Firmware/perg_freenove_esp32_s3_display/BleLineFramer.h"
         )
         harness = "#include " + json.dumps(str(header)) + "\n"
         harness += r"""

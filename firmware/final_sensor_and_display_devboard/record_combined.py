@@ -15,6 +15,8 @@ import record_perg as perg
 
 
 FOOT_COLUMNS = ["time_us", "L_bot_lb", "L_top_lb", "R_top_lb", "R_bot_lb", "balance_lb"]
+FOOT_REPORT_INTERVAL_S = 0.25
+ADC_LABELS = ("L_bot GPIO14", "L_top GPIO32", "R_top GPIO33", "R_bot GPIO34")
 MICROS_MODULUS = 1 << 32
 
 
@@ -30,6 +32,50 @@ def parse_foot(raw):
     except (UnicodeDecodeError, ValueError):
         pass
     return None
+
+
+def format_adc_snapshot(raw):
+    try:
+        tag, *feet = raw.decode("ascii").strip().split(",")
+        if tag != "adc_diag" or len(feet) != 3 * len(ADC_LABELS):
+            return None
+        readings = []
+        for i, label in enumerate(ADC_LABELS):
+            count, mv, tare = feet[3 * i:3 * i + 3]
+            readings.append(f"{label} {int(count)} ({float(mv):.1f} mV, tare {float(tare):.1f})")
+        return " | ".join(readings)
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def diagnose(port):
+    with serial.Serial(port, perg.BAUD, timeout=0.2) as stream:
+        time.sleep(2)
+        stream.reset_input_buffer()
+        print("Turn the flywheel slowly or press one foot sensor at a time. Ctrl+C to finish.")
+        next_request = time.monotonic()
+        deadline = next_request + 4
+        hall_min, hall_max = None, None
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_request:
+                stream.write(b"D")
+                next_request = now + 0.25
+            raw = stream.read_until(b"\n", size=perg.MAX_LINE_BYTES)
+            if raw.startswith(b"adc_diag,") and raw.endswith(b"\n"):
+                reading = format_adc_snapshot(raw)
+                if reading is not None:
+                    hall_range = "no samples" if hall_min is None else f"{hall_min}–{hall_max}"
+                    print(f"Hall GPIO27 {hall_range} | {reading}", flush=True)
+                    hall_min, hall_max = None, None
+                    deadline = time.monotonic() + 4
+            elif raw.endswith(b"\n") and raw[:1].isdigit():
+                sample = perg.parse_line(raw)
+                if sample is not None:
+                    adc = sample[1]
+                    hall_min = adc if hall_min is None else min(hall_min, adc)
+                    hall_max = adc if hall_max is None else max(hall_max, adc)
+        raise RuntimeError("No ADC snapshot received. Upload the updated combined sketch and check the port.")
 
 
 def record(port, directory, start_immediately):
@@ -57,6 +103,7 @@ def record(port, directory, start_immediately):
                 hall_count += 1
             print(f"Recording to {directory}. Tap LCD Stop or press Ctrl+C to finish.")
             last_flush = time.monotonic()
+            next_foot_report = last_flush
 
             try:
                 while True:
@@ -85,6 +132,14 @@ def record(port, directory, start_immediately):
                     telemetry_count += writer is telemetry_writer
                     foot_count += writer is foot_writer
                     now = time.monotonic()
+                    if writer is foot_writer and now >= next_foot_report:
+                        _, left_bottom, left_top, right_top, right_bottom, balance = row
+                        print(
+                            f"Foot (lb) | L bottom {left_bottom} | L top {left_top} | "
+                            f"R top {right_top} | R bottom {right_bottom} | Balance R-L {balance}",
+                            flush=True,
+                        )
+                        next_foot_report = now + FOOT_REPORT_INTERVAL_S
                     if now - last_flush >= 1:
                         for file in (hall, telemetry, foot):
                             file.flush()
@@ -98,14 +153,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("port", nargs="?", help="USB port of the combined ESP32")
     parser.add_argument("--name", help="new test folder name; prompts if omitted")
-    parser.add_argument("--output-dir", type=Path, help="parent folder (default: data/live)")
-    parser.add_argument("--start-immediately", action="store_true", help="record without LCD Start")
+    parser.add_argument("--output-dir", type=Path, help="parent folder (default: data/recordings)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--start-immediately", action="store_true", help="record without LCD Start")
+    mode.add_argument("--diagnose", action="store_true", help="show live ADC values without recording")
     args = parser.parse_args()
-    directory = perg.choose_recording_dir(args.name, output_dir=args.output_dir)
     try:
-        record(args.port or perg.find_port(), directory, args.start_immediately)
+        if args.diagnose:
+            diagnose(args.port or perg.find_port())
+        else:
+            directory = perg.choose_recording_dir(args.name, output_dir=args.output_dir)
+            record(args.port or perg.find_port(), directory, args.start_immediately)
     except KeyboardInterrupt:
-        print("\nStopped before recording started.")
+        print("\nDiagnostic stopped." if args.diagnose else "\nStopped before recording started.")
     except (OSError, RuntimeError, perg.SerialConfigurationError) as error:
         sys.exit(str(error))
 

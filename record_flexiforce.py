@@ -2,7 +2,7 @@
 Record FlexiForce data from flexiforce_esp32.ino, then plot it.
 
 Start: run the script. Stop: Ctrl+C. The CSV and plot are saved to
-data/live/flexiforce_<timestamp>.csv/.png and the plot is shown.
+data/recordings/flexiforce_<timestamp>.csv/.png and the plot is shown.
 
 Usage:
     python3 record_flexiforce.py /dev/cu.usbserial-210
@@ -18,7 +18,7 @@ import serial
 
 BAUD = 115200
 COLUMNS = ["L_bot", "L_top", "R_top", "R_bot", "balance"]
-OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "live"
+OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "recordings"
 
 
 def parse(line: str) -> list[float] | None:

@@ -1,13 +1,14 @@
 /*
  * Combined Perg Hall and four-channel FlexiForce logger for a classic ESP32.
  * USB carries raw Hall samples, Perg telemetry, and tagged foot-force samples.
- * BLE carries the existing stats and Start/Stop protocol to the Freenove display.
+ * BLE carries stats and Start/Stop, plus the drive curve and live foot balance.
  * See README.md in this folder for wiring and recording instructions.
  */
 #include <BLEDevice.h>
 #include <BLEClient.h>
 #include <BLEScan.h>
 #include "PergMetrics.h"
+#include "StrokeForce.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -17,12 +18,13 @@
 #endif
 
 // ---------------- Hall sensor ----------------
-const int HALL_PIN = 27;                     // Perg signal (via 10 kΩ) -> ADC2_CH7
+const int HALL_PIN = 27;                     // Conditioned Perg signal -> ADC2_CH7
 const unsigned long SAMPLE_PERIOD_US = 500; // 0.5 ms -> 2000 samples/s
 const unsigned long BAUD = 460800;
 
 // Calibration and streaming pulse/stroke analysis live in PergMetrics.h.
 PergMetrics metrics;
+StrokeForce strokeForce;
 
 // ---------------- FlexiForce ----------------
 // Each sensor goes from 3.3 V to the ADC node, with 1 kΩ from the node to GND.
@@ -49,15 +51,19 @@ constexpr uint32_t FOOT_PERIOD_US = 10000; // target 100 frames/s
 constexpr int32_t FOOT_READ_MARGIN_US = 200;
 
 float footZeroMv[FOOT_CHANNELS];
+float footBalancePercent = 0; // positive means right
 uint32_t footSumMv[FOOT_CHANNELS];
 unsigned footReadIndex = FOOT_READS_PER_FRAME;
 uint32_t footFrameStartUs = 0;
 uint32_t nextFootFrameUs = 0;
+bool adcSnapshotRequested = false;
+bool footFrameSnapshot = false;
+uint16_t footRaw[FOOT_CHANNELS];
 
 float footForceLb(unsigned channel) {
   const FootSensor &sensor = FOOT_SENSORS[channel];
   const float mv = (float)footSumMv[channel] / FOOT_READS_PER_CHANNEL - footZeroMv[channel];
-  if (mv <= 0.0f) return 0.0f;
+  if (mv <= 0.0f || mv >= FOOT_SUPPLY_MV) return 0.0f;
   const float conductance = 1e6f * mv / (FOOT_RESISTANCE_OHMS * (FOOT_SUPPLY_MV - mv));
   if (conductance < FOOT_MIN_CONDUCTANCE) return 0.0f;
   return sensor.slope * conductance + sensor.intercept;
@@ -72,12 +78,17 @@ void sampleFootSensors(uint32_t nowUs) {
     }
     footFrameStartUs = nowUs;
     footReadIndex = 0;
+    footFrameSnapshot = adcSnapshotRequested;
+    adcSnapshotRequested = false;
     memset(footSumMv, 0, sizeof(footSumMv));
   }
 
   // Read one channel per Hall interval. Round-robin sampling puts each
   // channel's average near the same frame midpoint.
   const unsigned channel = footReadIndex % FOOT_CHANNELS;
+  if (footFrameSnapshot && footReadIndex < FOOT_CHANNELS) {
+    footRaw[channel] = analogRead(FOOT_SENSORS[channel].pin);
+  }
   footSumMv[channel] += analogReadMilliVolts(FOOT_SENSORS[channel].pin);
   if (++footReadIndex != FOOT_READS_PER_FRAME) return;
 
@@ -86,9 +97,21 @@ void sampleFootSensors(uint32_t nowUs) {
   const float leftTop = footForceLb(1);
   const float rightTop = footForceLb(2);
   const float rightBottom = footForceLb(3);
-  const float balance = rightTop + rightBottom - leftTop - leftBottom;
+  const float left = leftBottom + leftTop, right = rightTop + rightBottom;
+  const float balance = right - left;
+  const float total = left + right;
+  footBalancePercent = total > 0 ? 100.0f * balance / total : 0;
   Serial.printf("foot,%lu,%.1f,%.1f,%.1f,%.1f,%.1f\n",
                 (unsigned long)frameUs, leftBottom, leftTop, rightTop, rightBottom, balance);
+  if (footFrameSnapshot) {
+    // One raw conversion per foot and the frame's unzeroed mV average.
+    Serial.print("adc_diag");
+    for (unsigned i = 0; i < FOOT_CHANNELS; ++i) {
+      const float averageMv = (float)footSumMv[i] / FOOT_READS_PER_CHANNEL;
+      Serial.printf(",%u,%.1f,%.1f", (unsigned)footRaw[i], averageMv, footZeroMv[i]);
+    }
+    Serial.println();
+  }
 }
 
 // ---------------- BLE display discovery ----------------
@@ -99,6 +122,7 @@ const char *DISPLAY_BLE_MAC = "";
 const char *SERVICE_UUID = "be7a1000-7c2d-4e58-a608-dbea31094d61";
 const char *TELEMETRY_UUID = "be7a1001-7c2d-4e58-a608-dbea31094d61";
 const char *COMMAND_UUID = "be7a1002-7c2d-4e58-a608-dbea31094d61";
+const char *FORCE_TELEMETRY_UUID = "be7a1003-7c2d-4e58-a608-dbea31094d61";
 
 const unsigned long TELEMETRY_PERIOD_MS = 100; // 10 telemetry updates/s
 
@@ -107,7 +131,8 @@ const unsigned long TELEMETRY_PERIOD_MS = 100; // 10 telemetry updates/s
 // A one-item queue copies complete lines between tasks. The detector never
 // waits for BLE; a slow/disconnected display gets the newest update.
 struct TelemetryLine {
-  char text[144];
+  char legacy[144];
+  char force[180];
 };
 QueueHandle_t telemetryQueue = nullptr;
 QueueHandle_t commandQueue = nullptr;
@@ -129,6 +154,7 @@ void bluetoothTask(void *) {
   scan->setWindow(80);
   BLEClient *client = BLEDevice::createClient(); // reused across reconnects
   BLERemoteCharacteristic *telemetry = nullptr;
+  bool useForceTelemetry = false;
   for (;;) {
     if (!client->isConnected()) {
       telemetry = nullptr; // remote characteristics expire on reconnect
@@ -151,7 +177,11 @@ void bluetoothTask(void *) {
       client->setMTU(185);
       BLERemoteService *service = client->getService(BLEUUID(SERVICE_UUID));
       BLERemoteCharacteristic *commands = service ? service->getCharacteristic(BLEUUID(COMMAND_UUID)) : nullptr;
-      telemetry = service ? service->getCharacteristic(BLEUUID(TELEMETRY_UUID)) : nullptr;
+      telemetry = service ? service->getCharacteristic(BLEUUID(FORCE_TELEMETRY_UUID)) : nullptr;
+      useForceTelemetry = telemetry && telemetry->canWrite();
+      if (!useForceTelemetry && service) {
+        telemetry = service->getCharacteristic(BLEUUID(TELEMETRY_UUID));
+      }
       if (!telemetry || !telemetry->canWrite() || !commands || !commands->canNotify()) {
         client->disconnect();
         telemetry = nullptr;
@@ -162,7 +192,8 @@ void bluetoothTask(void *) {
     }
     TelemetryLine line;
     if (telemetry && xQueueReceive(telemetryQueue, &line, pdMS_TO_TICKS(10)) == pdTRUE) {
-      size_t length = strlen(line.text);
+      char *message = useForceTelemetry ? line.force : line.legacy;
+      size_t length = strlen(message);
       // Use the negotiated payload size; fall back to 20-byte packets at MTU 23.
       // Acknowledged writes keep chunks ordered and detect a broken transfer.
       size_t payload = client->getMTU() > 23 ? client->getMTU() - 3 : 20;
@@ -170,7 +201,7 @@ void bluetoothTask(void *) {
         size_t count = length - offset;
         if (count > payload) count = payload;
         if (!client->isConnected() ||
-            !telemetry->writeValue((uint8_t *)line.text + offset, count, true)) {
+            !telemetry->writeValue((uint8_t *)message + offset, count, true)) {
           client->disconnect(); // discard any partial line on the receiver
           break;
         }
@@ -181,9 +212,9 @@ void bluetoothTask(void *) {
 
 // Hall voltage, same calibration as perg_logger.ino: deviation in volts
 // from the signal's ~1.64 V bias point (3.6 V across the 12-bit range,
-// bias at count 1870).
+// bias at count 1990).
 const float VOLT_FULL_SCALE = 3.6f;
-const float VOLT_BIAS_COUNTS = 1870.0f;
+const float VOLT_BIAS_COUNTS = 1990.0f;
 float lastVolt = 0.0f;
 
 float distanceM = 0.0f;           // accepted magnet intervals x metres per pulse
@@ -200,6 +231,7 @@ void controlSession(char action) {
     footReadIndex = FOOT_READS_PER_FRAME;
     nextFootFrameUs = nowUs; // the first saved frame starts after the session marker
     sessionStarted = true;
+    strokeForce.reset(nowUs);
     sessionStartMs = millis();
     sessionElapsedMs = 0;
     distanceM = 0;
@@ -219,6 +251,7 @@ void controlSession(char action) {
     // The USB recorder arms a new session without any reset-button timing.
     sessionStarted = false;
     sessionElapsedMs = 0;
+    strokeForce.reset(nowUs);
     distanceM = 0;
     sessionPulseOrigin = metrics.pulses;
     Serial.print("session_ready,");
@@ -237,10 +270,8 @@ void setup() {
   // No pinMode(INPUT_PULLUP/PULLDOWN): pull resistors would distort the
   // analog signal. analogRead() configures the pin for the ADC itself.
   analogReadResolution(12);                   // 0-4095
-  analogSetPinAttenuation(HALL_PIN, ADC_11db); // full range ~0-3.1 V
-  for (const FootSensor &sensor : FOOT_SENSORS) {
-    analogSetPinAttenuation(sensor.pin, ADC_11db);
-  }
+  // Set attenuation before the first ADC read initializes the channels.
+  analogSetAttenuation(ADC_11db);
   delay(500);
   for (unsigned channel = 0; channel < FOOT_CHANNELS; ++channel) {
     uint32_t sumMv = 0;
@@ -274,8 +305,11 @@ void loop() {
   if (commandQueue && xQueueReceive(commandQueue, &action, 0) == pdTRUE) {
     controlSession(action);
   }
-  // A single-byte USB arm command is used only by --start-on-button.
-  if (Serial.available() && Serial.read() == 'A') controlSession('A');
+  if (Serial.available()) {
+    const int command = Serial.read();
+    if (command == 'A') controlSession('A');
+    if (command == 'D') adcSnapshotRequested = true;
+  }
   // ---- Telemetry first, unconditional and on its own timeline ----
   // Emitted every TELEMETRY_PERIOD_MS no matter what the detector is doing:
   // the voltage field always reflects the last ADC reading, RPM is 0 when
@@ -307,11 +341,17 @@ void loop() {
 
   float v = (float)adc;
 
-  // Instantaneous Hall voltage for the display (same calibration as
+  // Instantaneous Hall voltage for USB and the original display (same calibration as
   // perg_logger.ino's CSV column: volts relative to the signal bias point).
   lastVolt = VOLT_FULL_SCALE * (v - VOLT_BIAS_COUNTS) / 4096.0f;
 
+  const uint32_t previousPulses = metrics.pulses;
   metrics.sample((uint32_t)now, adc);
+  if (sessionStarted && metrics.pulses != previousPulses) {
+    uint32_t midpoint;
+    float turnRpm;
+    if (metrics.latestRevolution(midpoint, turnRpm)) strokeForce.sampleSpeed(midpoint, turnRpm);
+  }
 
   const uint32_t footSampleUs = micros();
   if ((int32_t)(nextSampleUs - footSampleUs) >= FOOT_READ_MARGIN_US) {
@@ -324,6 +364,8 @@ void sendTelemetry(unsigned long nowUs) {
   if (sessionStarted) {
     distanceM = (uint32_t)(metrics.pulses - sessionPulseOrigin) *
                 (PergMetrics::METRES_PER_REV / 8.0f);
+    uint32_t start, end;
+    if (metrics.latestStroke(start, end)) strokeForce.finish(start, end);
   }
   float paceS = metrics.pace((uint32_t)nowUs);
   float elapsedS = (sessionStarted ? millis() - sessionStartMs : sessionElapsedMs) / 1000.0f;
@@ -334,9 +376,21 @@ void sendTelemetry(unsigned long nowUs) {
   snprintf(values, sizeof(values), "%.1f,%.1f,%.1f,%.3f,%.1f,%.1f,%.0f,%.1f\n",
            metrics.rpm, paceS, distanceM, lastVolt, metrics.periodMs, elapsedS,
            watts, metrics.strokeRate);
-  snprintf(line.text, sizeof(line.text), "session_state,%d\n%s", sessionStarted ? 1 : 0, values);
-  // Mirror exactly the formatted BLE fields, with the update timestamp
-  // so the recorder can align telemetry with raw Hall samples. USB writes
+  snprintf(line.legacy, sizeof(line.legacy), "session_state,%d\n%s", sessionStarted ? 1 : 0, values);
+  char curve[2 * StrokeForce::POINTS + 1] = {};
+  const char *hex = "0123456789abcdef";
+  if (strokeForce.curveReady) {
+    for (int i = 0; i < StrokeForce::POINTS; ++i) {
+      curve[2 * i] = hex[strokeForce.curve[i] >> 4];
+      curve[2 * i + 1] = hex[strokeForce.curve[i] & 0x0f];
+    }
+  }
+  // Repeat the latest curve so dropped updates and reconnects recover it.
+  snprintf(line.force, sizeof(line.force),
+           "stats,%d,%.1f,%.1f,%.1f,%.1f,%.0f,%.1f,%.1f\ndrive,%s\n",
+           sessionStarted ? 1 : 0, metrics.rpm, paceS, distanceM, elapsedS,
+           watts, metrics.strokeRate, footBalancePercent, curve);
+  // Keep the recorder's existing CSV fields and update timestamp. USB writes
   // stay in this task to prevent telemetry and sample lines interleaving.
   Serial.print("telemetry,");
   Serial.print(nowUs);

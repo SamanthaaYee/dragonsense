@@ -23,7 +23,7 @@ class MetricsFirmwareTests(unittest.TestCase):
     def test_calibration_strokes_idle_and_rollover(self):
         header = (
             Path(__file__).resolve().parents[1]
-            / "firmware/perg_full_logger/PergMetrics.h"
+            / "firmware/Old Firmware/perg_full_logger/PergMetrics.h"
         )
         harness = "#include " + json.dumps(str(header)) + "\n"
         harness += r"""

@@ -4,6 +4,27 @@ ESP32 firmware and Python tools for capturing a paddling ergometer's flywheel
 sensor signal, estimating RPM, displaying Bluetooth telemetry, and replaying
 recorded or synthetic sensor waveforms into the original monitor.
 
+## Current firmware
+
+- **Sensor ESP32** reads the flywheel Hall signal and four foot sensors.
+  [Combined sensor logger setup](firmware/final_sensor_and_display_devboard/README.md)
+- **Freenove ESP32-S3 LCD** shows workout stats, the estimated stroke force
+  curve, and live left/right foot balance.
+  [Force display setup](firmware/perg_freenove_force_display/README.md)
+
+From the repository root, run the combined recorder with the sensor board's
+USB port. Wait for the prompt, then tap **START** on the LCD. Tap **STOP** to
+save the session.
+
+```bash
+python3 firmware/final_sensor_and_display_devboard/record_combined.py /dev/cu.usbserial-XXX
+```
+
+Earlier logger, display, and standalone foot-sensor sketches are in
+[`firmware/Old Firmware`](<firmware/Old Firmware>).
+
+## Project background
+
 **Calibration remains experimental.** The monitor has not yet accepted a
 replayed drag-59 calibration. See the [November 9 progress report](docs/experiments/2026-11-09.md)
 for observed results, archived data, and known limitations.
@@ -17,12 +38,10 @@ for the protocol label, timing findings, and serial connection troubleshooting.
 
 ```text
 firmware/
-  perg_logger/             Original 1 kHz USB raw-sample logger
-  perg_bt_logger/          1 kHz Bluetooth telemetry logger
-  perg_full_logger/        Combined 2 kHz USB + Bluetooth logger
-  perg_stat_display/       CYD touchscreen display with Start/Stop
-  perg_full_logger_ble/    Separate BLE logger for the Freenove S3 screen
-  perg_freenove_esp32_s3_display/  Freenove FNK0104B touchscreen (BLE)
+  final_sensor_and_display_devboard/  Current Hall and foot-sensor logger
+  perg_freenove_force_display/        Current Freenove LCD dashboard
+  Old Firmware/            Earlier loggers, displays, and foot-sensor sketches
+  ble_mac_address/         BLE address lookup sketch
   perg_signal_player/      DAC waveform player (separate board role)
 record_perg.py             USB sample and telemetry recorder
 analyze_perg.py            Offline waveform and stroke analysis
@@ -38,7 +57,7 @@ data/
   sessions/2026-11-09/     Three archived recordings and checksum manifest
   sessions/2026-11-15_pace_based/  Seven pace-based recordings and manifest
   synthetic/2026-11-09/    Two generated trials with explicit outcome records
-  live/                   Named captures (local, ignored by Git)
+  recordings/             Named captures (local, ignored by Git)
 docs/images/              Original example analysis plot
 outputs/                  Generated analysis files (ignored by Git)
 ```
@@ -52,17 +71,17 @@ and compile the sketches separately. Open only the sketch for the board's role.
 python3 -m pip install -r requirements.txt
 ```
 
-For the CYD display, install **TFT_eSPI by Bodmer** in Arduino IDE. Configure
+For the original CYD display, install **TFT_eSPI by Bodmer** in Arduino IDE. Configure
 the library's `User_Setup.h` with the ILI9341 driver and pin definitions shown
-in `firmware/perg_stat_display/perg_stat_display.ino`. Enable `LOAD_GLCD`,
+in `firmware/Old Firmware/perg_stat_display/perg_stat_display.ino`. Enable `LOAD_GLCD`,
 `LOAD_FONT2`, `LOAD_FONT4`, and `LOAD_FONT7`. Definitions in the sketch alone
 do not configure the separately compiled library. Library updates may reset
 this setup.
 
-## Record a session
+## Record a session with the original hardware
 
-Upload `firmware/perg_full_logger/perg_full_logger.ino` to the sensor ESP32
-and `firmware/perg_stat_display/perg_stat_display.ino` to the CYD. The logger
+Upload `firmware/Old Firmware/perg_full_logger/perg_full_logger.ino` to the sensor ESP32
+and `firmware/Old Firmware/perg_stat_display/perg_stat_display.ino` to the CYD. The logger
 is configured for 2 kHz raw sampling and 10 telemetry updates per second.
 Its USB baud rate is 460800, the recorder's default:
 
@@ -76,7 +95,7 @@ With multiple boards connected, specify the sensor logger's port:
 python3 record_perg.py /dev/cu.usbserial-10
 ```
 
-For the original USB-only `firmware/perg_logger/perg_logger.ino` sketch,
+For the original USB-only `firmware/Old Firmware/perg_logger/perg_logger.ino` sketch,
 which samples at 1 kHz, select its matching baud rate and start immediately:
 
 ```bash
@@ -84,8 +103,8 @@ python3 record_perg.py /dev/cu.usbserial-210 --baud 921600 --start-immediately
 ```
 
 The recorder asks for a recording name before connecting, for example
-`calibration_01`. It saves raw samples to `data/live/calibration_01/perg_data.csv`
-and mirrored telemetry to `data/live/calibration_01/perg_telemetry.csv`, relative
+`calibration_01`. It saves raw samples to `data/recordings/calibration_01/perg_data.csv`
+and mirrored telemetry to `data/recordings/calibration_01/perg_telemetry.csv`, relative
 to the project directory regardless of the terminal's working directory.
 Existing recording folders are refused so previous captures are not overwritten.
 With the full logger, the recorder waits for LCD Start before creating the
@@ -237,7 +256,7 @@ python3 analyze_perg.py data/examples/perg_data.csv
 Analyze a named capture or a saved session:
 
 ```bash
-python3 analyze_perg.py data/live/calibration_01/perg_data.csv
+python3 analyze_perg.py data/recordings/calibration_01/perg_data.csv
 python3 analyze_perg.py data/sessions/misha/perg_data.csv
 ```
 

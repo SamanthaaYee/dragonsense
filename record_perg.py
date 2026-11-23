@@ -2,10 +2,10 @@
 Perg Hall sensor recorder.
 
 Reads CSV lines ("time_us,adc_value") streamed by perg_logger.ino or
-perg_full_logger.ino and saves them to data/live/NAME/perg_data.csv. By default,
+perg_full_logger.ino and saves them to data/recordings/NAME/perg_data.csv. By default,
 the display's Start and Stop buttons control the capture.
 The full logger also mirrors its Bluetooth telemetry over USB. Tagged
-telemetry lines are saved to data/live/NAME/perg_telemetry.csv with the ESP32 timestamp,
+telemetry lines are saved to data/recordings/NAME/perg_telemetry.csv with the ESP32 timestamp,
 RPM, pace, distance, Hall voltage, pulse period, elapsed time, and watts.
 
 Each row is one ADC sample of the Hall sensor voltage on GPIO 27, sampled
@@ -46,7 +46,7 @@ BAUD = 460800
 CONNECT_TIMEOUT_S = 8
 MAX_LINE_BYTES = 128
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "live"
+OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "recordings"
 TELEMETRY_COLUMNS = [
     "time_us",
     "rpm",
@@ -224,7 +224,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="parent folder for recordings (default: data/live in the project)",
+        help="parent folder for recordings (default: data/recordings in the project)",
     )
     start_mode = parser.add_mutually_exclusive_group()
     start_mode.add_argument(
