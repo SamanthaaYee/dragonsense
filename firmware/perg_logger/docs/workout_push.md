@@ -31,12 +31,14 @@ prefer simple and robust over featureful.
 ## System overview
 
 ```text
- phone (Bluefy)                      Freenove ESP32-S3 display              sensor ESP32
- web/index.html  --BLE write-->  workout characteristic                   (logger, BLE central)
-                 <--BLE read---  status (same characteristic)
-                                 Workout.h: parse, runner, status text
-                                 telemetry characteristic  <--BLE write--  telemetry @10 Hz
-                                 command characteristic    --notify---->   START / STOP
+phone (Bluefy)                    Freenove ESP32-S3 display
+  workout characteristic  --BLE write-->
+  status                  <--BLE read---
+  phone telemetry         <--notify------  stats / drive
+
+                                  Workout.h: parse, runner, status text
+                                  telemetry characteristic <--BLE write-- sensor ESP32
+                                  command characteristic   --notify----> START / STOP
 ```
 
 - The **display** (BLE peripheral/GATT server) is the only firmware that
@@ -127,7 +129,8 @@ name `perg-force-display`.
 | --- | --- | --- | --- |
 | Force telemetry | `be7a1003-7c2d-4e58-a608-dbea31094d61` | write | logger → display (`stats` and `drive`) |
 | Command | `be7a1002-7c2d-4e58-a608-dbea31094d61` | notify | display → logger (unchanged) |
-| **Workout** | `be7a1004-7c2d-4e58-a608-dbea31094d61` | read, write | phone ↔ display (new) |
+| **Workout** | `be7a1004-7c2d-4e58-a608-dbea31094d61` | read, write | phone ↔ display |
+| **Phone telemetry** | `be7a1005-7c2d-4e58-a608-dbea31094d61` | notify | display → phone (`stats` and `drive`) |
 
 ### Push sequence (page)
 
@@ -138,6 +141,33 @@ name `perg-force-display`.
    `writeValue`). 20 bytes fits the default ATT MTU, so no MTU assumptions.
 3. Read the characteristic once and interpret the status below.
 4. Disconnect, freeing the connection slot.
+
+### Phone telemetry subscription (page)
+
+The phone receives live telemetry from the display through the
+Phone telemetry characteristic. The display forwards the logger's
+existing `stats` and `drive` messages; the phone does not connect
+directly to the sensor logger.
+
+1. After connecting to the display, get the Phone telemetry
+   characteristic (`be7a1005-7c2d-4e58-a608-dbea31094d61`).
+2. Subscribe using `startNotifications()`.
+3. Listen for `characteristicvaluechanged` events.
+4. Decode each notification as UTF-8 text.
+5. Treat notifications as newline-terminated telemetry lines.
+   Buffer incoming data and split on `\n` so partial lines
+   and multiple lines are handled correctly.
+6. Parse recognized `stats,` and `drive,` messages.
+   Ignore unrecognized or malformed messages.
+7. Call `stopNotifications()` when finished, then disconnect.
+
+The display forwards only `stats,` and `drive,` messages to the
+phone. Notifications are sent at the logger's existing telemetry
+rate (approximately 10 Hz).
+
+The phone should not assume that every notification represents
+a complete message. BLE notifications are transport chunks;
+newline framing defines the message boundary.
 
 ### Status value (display)
 

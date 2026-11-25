@@ -1,0 +1,17 @@
+/**
+ * Minimal typings for Node's built-in test runner.
+ * Avoids adding `@types/node` while Expo remains the app's main toolchain.
+ */
+declare module 'node:assert/strict' {
+  const assert: {
+    equal(actual: unknown, expected: unknown, message?: string): void;
+    deepEqual(actual: unknown, expected: unknown, message?: string): void;
+    ok(value: unknown, message?: string): void;
+  };
+  export default assert;
+}
+
+declare module 'node:test' {
+  export function describe(name: string, fn: () => void): void;
+  export function it(name: string, fn: () => void): void;
+}
