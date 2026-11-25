@@ -28,9 +28,11 @@ const char *SERVICE_UUID = "be7a1000-7c2d-4e58-a608-dbea31094d61";
 const char *FORCE_TELEMETRY_UUID = "be7a1003-7c2d-4e58-a608-dbea31094d61";
 const char *COMMAND_UUID = "be7a1002-7c2d-4e58-a608-dbea31094d61";
 const char *WORKOUT_UUID = "be7a1004-7c2d-4e58-a608-dbea31094d61";
+const char *PHONE_TELEMETRY_UUID = "be7a1005-7c2d-4e58-a608-dbea31094d61";
 TFT_eSPI tft;
 TFT_eSprite frame(&tft);
 BLECharacteristic *commandCharacteristic = nullptr;
+BLECharacteristic *phoneTelemetryCharacteristic = nullptr;
 std::atomic<bool> linkConnected{false};
 std::atomic<bool> advertisePending{false};
 std::atomic<uint32_t> linkGeneration{0};
@@ -466,6 +468,10 @@ void setup() {
   commandCharacteristic = service->createCharacteristic(
       COMMAND_UUID, BLECharacteristic::PROPERTY_NOTIFY);
   commandCharacteristic->addDescriptor(new BLE2902());
+  phoneTelemetryCharacteristic = service->createCharacteristic(
+    PHONE_TELEMETRY_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY);
+  phoneTelemetryCharacteristic->addDescriptor(new BLE2902());
   BLECharacteristic *workoutCharacteristic = service->createCharacteristic(
       WORKOUT_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   workoutCharacteristic->setCallbacks(&workoutCallbacks);
@@ -491,19 +497,48 @@ void loop() {
 
   if (linkConnected.load()) {
     ReceivedLine line;
-    for (int n = 0; n < 6 && xQueueReceive(receivedLines, &line, 0) == pdTRUE; ++n) {
-      if (line.generation != observedGeneration) continue;
-      if (readStats(line.text)) lastStatsMs = now;
-      else if (sessionKnown) readCurve(line.text);
+  
+    for (
+      int n = 0;
+      n < 6 && xQueueReceive(
+        receivedLines, &line, 0
+      ) == pdTRUE;
+      ++n
+    ) {
+      if (line.generation != observedGeneration) {
+        continue;
+      }
+  
+      if (readStats(line.text)) {
+        lastStatsMs = now;
+      } else if (sessionKnown) {
+        readCurve(line.text);
+      }
+  
+      if (
+        phoneTelemetryCharacteristic != nullptr &&
+        (
+          strncmp(line.text, "stats,", 6) == 0 ||
+          strncmp(line.text, "drive,", 6) == 0
+        )
+      ) {
+        phoneTelemetryCharacteristic->setValue(
+          String(line.text) + "\n"
+        );
+        phoneTelemetryCharacteristic->notify();
+      }
     }
+  
     if (sessionKnown && now - lastStatsMs > 2000) {
       sessionKnown = commandPending = curveReady = false;
       redraw = true;
     }
+  
     if (now - lastTouchMs >= 15) {
       lastTouchMs = now;
       pollTouch();
     }
+  
     if (commandPending && millis() - commandSentMs > 1000) {
       sendCommand(requestedRunning);
       commandSentMs = millis();
