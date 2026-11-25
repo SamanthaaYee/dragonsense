@@ -1,0 +1,352 @@
+{
+  "archive_date": "2026-11-15",
+  "timezone": "America/Toronto",
+  "collection_protocol": "pace-based",
+  "protocol_source": "User identified this collection as pace-based.",
+  "target_pace_s_per_500m": null,
+  "target_pace_note": "Individual target paces and interval boundaries were not supplied; pace_s telemetry is an estimate, not a prescribed target.",
+  "source_files_preserved_byte_for_byte": true,
+  "recordings": [
+    {
+      "folder": "Anna45kg60drag",
+      "original_session_name": "Anna45kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "4d3a2645ce723c9f4adc07fdb4e8cd2e7c48014375b52cf44b1829d1d6268ebd",
+          "bytes": 4015635,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 265960,
+          "first_time_us": 323,
+          "last_time_us": 132979518,
+          "endpoint_span_seconds": 132.979195,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 821,
+          "gaps_over_1500_us": 0,
+          "adc_out_of_range": 0,
+          "timing_anomalies": []
+        },
+        "perg_telemetry.csv": {
+          "sha256": "32e99c412963409e69046efc7b6b71d1aab361503df332f27aeb53e46f7bdd00",
+          "bytes": 69753,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 1332,
+          "first_time_us": 0,
+          "last_time_us": 132979709,
+          "endpoint_span_seconds": 132.979709,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100097
+        }
+      }
+    },
+    {
+      "folder": "Anna55kg60drag",
+      "original_session_name": "Anna55kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "adcaf47aa6c89616515fdfa286895daaf7823cd475753242eacbf401e9b9a4b3",
+          "bytes": 1988402,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 134800,
+          "first_time_us": 377,
+          "last_time_us": 67399885,
+          "endpoint_span_seconds": 67.399508,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 769,
+          "gaps_over_1500_us": 0,
+          "adc_out_of_range": 0,
+          "timing_anomalies": []
+        },
+        "perg_telemetry.csv": {
+          "sha256": "133a0c7633f4df234259cae788bc318d966a21a13e279723845d5a78a4b8ae95",
+          "bytes": 34543,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 677,
+          "first_time_us": 0,
+          "last_time_us": 67399999,
+          "endpoint_span_seconds": 67.399999,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100177
+        }
+      }
+    },
+    {
+      "folder": "Anna65kg60drag",
+      "original_session_name": "Anna65kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "49988c5a29306c980194c985e5d3e8f0c46720292582b3a037165fa6397a4e7a",
+          "bytes": 2000558,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 135680,
+          "first_time_us": 385,
+          "last_time_us": 67839883,
+          "endpoint_span_seconds": 67.839498,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 825,
+          "gaps_over_1500_us": 0,
+          "adc_out_of_range": 0,
+          "timing_anomalies": []
+        },
+        "perg_telemetry.csv": {
+          "sha256": "7616839e53b8a2c8bbf782d5e530c07ad66b48f982ffaaaaa6e40ab2baacba24",
+          "bytes": 34642,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 682,
+          "first_time_us": 0,
+          "last_time_us": 67840000,
+          "endpoint_span_seconds": 67.84,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100265
+        }
+      }
+    },
+    {
+      "folder": "Anna68kg60drag",
+      "original_session_name": "Anna68kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "08853940441efc001f9a2022b36f229c3122f52d65d07603bc17515a37fd9619",
+          "bytes": 1931750,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 131050,
+          "first_time_us": 382,
+          "last_time_us": 65529890,
+          "endpoint_span_seconds": 65.529508,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 3000,
+          "gaps_over_1500_us": 2,
+          "adc_out_of_range": 0,
+          "timing_anomalies": [
+            {
+              "data_row": 4493,
+              "previous_time_us": 2245880,
+              "time_us": 2248880,
+              "delta_us": 3000
+            },
+            {
+              "data_row": 13464,
+              "previous_time_us": 6733880,
+              "time_us": 6736880,
+              "delta_us": 3000
+            }
+          ]
+        },
+        "perg_telemetry.csv": {
+          "sha256": "9a614d2c635f66654dea3f9984e1b9e3b8f1934f12578da882415d1ba3c1f4f1",
+          "bytes": 33617,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 658,
+          "first_time_us": 0,
+          "last_time_us": 65530010,
+          "endpoint_span_seconds": 65.53001,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100275
+        }
+      }
+    },
+    {
+      "folder": "Irtaza50kg60drag",
+      "original_session_name": "Irtaza50kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "88f36f6dc06458be5861d69b3e72ab2a9a2a73b27429fa5695b5afb26f65d0a3",
+          "bytes": 2018147,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 136699,
+          "first_time_us": 251,
+          "last_time_us": 68349593,
+          "endpoint_span_seconds": 68.349342,
+          "backward_timestamps": 1,
+          "max_forward_gap_us": 4097021931,
+          "gaps_over_1500_us": 1,
+          "adc_out_of_range": 0,
+          "timing_anomalies": [
+            {
+              "data_row": 21128,
+              "previous_time_us": 10563099,
+              "time_us": 4107585030,
+              "delta_us": 4097021931
+            },
+            {
+              "data_row": 21129,
+              "previous_time_us": 4107585030,
+              "time_us": 10564599,
+              "delta_us": -4097020431
+            }
+          ]
+        },
+        "perg_telemetry.csv": {
+          "sha256": "93bbe11302cd23224abe32cc6d936a6bd268b4f9042017f5d80cad117e45569c",
+          "bytes": 34954,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 686,
+          "first_time_us": 0,
+          "last_time_us": 68350042,
+          "endpoint_span_seconds": 68.350042,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100310
+        }
+      }
+    },
+    {
+      "folder": "Irtaza60kg60drag",
+      "original_session_name": "Irtaza60kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "d6bc56660b9002add7d7a58d83dab134413ecd6edb10cffe9cebd72c399b7d0b",
+          "bytes": 2016998,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 136460,
+          "first_time_us": 385,
+          "last_time_us": 68229891,
+          "endpoint_span_seconds": 68.229506,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 822,
+          "gaps_over_1500_us": 0,
+          "adc_out_of_range": 0,
+          "timing_anomalies": []
+        },
+        "perg_telemetry.csv": {
+          "sha256": "3fc90f7aa0506e578bfb609f8894d7193e51b4f13787a2326d22a8a05417e8b9",
+          "bytes": 35110,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 685,
+          "first_time_us": 0,
+          "last_time_us": 68230004,
+          "endpoint_span_seconds": 68.230004,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100262
+        }
+      }
+    },
+    {
+      "folder": "irtaza68kg60drag",
+      "original_session_name": "irtaza68kg60drag",
+      "collection_protocol": "pace-based",
+      "files": {
+        "perg_data.csv": {
+          "sha256": "06371a99d6a3128a58cb6490c209ff4f7ff030e5b4dc8da3c422beebf4b1570c",
+          "bytes": 4460856,
+          "columns": [
+            "time_us",
+            "adc_value"
+          ],
+          "rows": 293200,
+          "first_time_us": 377,
+          "last_time_us": 146599882,
+          "endpoint_span_seconds": 146.599505,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 959,
+          "gaps_over_1500_us": 0,
+          "adc_out_of_range": 0,
+          "timing_anomalies": []
+        },
+        "perg_telemetry.csv": {
+          "sha256": "1e4d5e0f851086f136b3b7ba0bc52c9e0fc67db47007c33f0d9e092000ae545c",
+          "bytes": 76629,
+          "columns": [
+            "time_us",
+            "rpm",
+            "pace_s",
+            "distance_m",
+            "hall_v",
+            "period_ms",
+            "elapsed_s",
+            "watts",
+            "stroke_rate_spm"
+          ],
+          "rows": 1469,
+          "first_time_us": 0,
+          "last_time_us": 146599999,
+          "endpoint_span_seconds": 146.599999,
+          "backward_timestamps": 0,
+          "max_forward_gap_us": 100416
+        }
+      }
+    }
+  ]
+}

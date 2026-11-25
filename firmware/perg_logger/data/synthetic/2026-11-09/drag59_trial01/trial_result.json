@@ -1,0 +1,9 @@
+{
+  "playback": "stopped_early_after_user_report",
+  "user_reported_peak_rpm": 680,
+  "user_reported_displayed_drag": 80,
+  "drag_still_flashing": true,
+  "calibration_accepted": false,
+  "accepted_drag": null,
+  "interpretation": "Displayed speed did not exceed 700 RPM; this trial cannot establish a drag mapping."
+}

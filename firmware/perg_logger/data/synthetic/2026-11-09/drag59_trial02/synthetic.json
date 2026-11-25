@@ -1,0 +1,21 @@
+{
+  "synthetic": true,
+  "reference_csv": "data/sessions/2026-11-09/68kg_drag59/perg_data.csv",
+  "reference_drag_user_supplied": 59.0,
+  "requested_drag_unverified": 59.0,
+  "reference_700_to_300_seconds": 12.386666666666667,
+  "generated_700_to_300_seconds": 12.386666666666676,
+  "peak_rpm": 840.0,
+  "duration_seconds": 139.15828457809235,
+  "initial_idle_seconds": 2.0,
+  "spinup_seconds": 6.0,
+  "peak_hold_seconds": 5.0,
+  "final_idle_seconds": 5.0,
+  "sample_rate_hz": 2000,
+  "pulses_per_revolution_assumed": 8,
+  "amplitude_peak_volts_nominal": 0.6,
+  "rpm_decay_a": 0.00014784874975520195,
+  "rpm_decay_b": 1.0,
+  "model": "dRPM/dt = -(a*RPM^2+b); a scales with requested/reference drag",
+  "limitation": "The monitor's drag mapping is unknown. Target drag is not guaranteed; record its accepted result."
+}

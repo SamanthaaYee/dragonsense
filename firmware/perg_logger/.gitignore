@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+/data/recordings/
+/outputs/
+
+.venv/
+venv/
+env/
+
+# Arduino metadata generated for this Mac's VS Code C++ editor.
+/.vscode/arduino-build/
+/.vscode/compile_commands.json
+/.vscode/c_cpp_properties.json
