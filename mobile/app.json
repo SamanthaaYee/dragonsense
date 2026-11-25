@@ -8,9 +8,11 @@
     "scheme": "dragonsensemobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.dragonsense.mobile"
     },
     "android": {
+      "package": "com.dragonsense.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -34,7 +36,14 @@
         }
       ],
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-sharing",
+      [
+        "react-native-ble-plx",
+        {
+          "bluetoothAlwaysPermission": "Allow DragonSense to connect to the PERG monitor and collect workout readings."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

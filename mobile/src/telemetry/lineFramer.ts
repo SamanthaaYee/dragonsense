@@ -1,9 +1,9 @@
 /**
  * Max characters in one telemetry line, excluding the newline.
- * Matches firmware `BleLineFramer` / `BasicLineFramer<112>` where capacity
+ * Matches firmware `BleLineFramer` / `BasicLineFramer<128>` where capacity
  * includes the terminator, so the longest stored line is Capacity - 1.
  */
-export const TELEMETRY_MAX_LINE_LENGTH = 111;
+export const TELEMETRY_MAX_LINE_LENGTH = 127;
 
 /**
  * Buffers UTF-8 text chunks from BLE notifications into newline-delimited

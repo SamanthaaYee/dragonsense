@@ -1,6 +1,7 @@
 export {
   DRIVE_POINT_COUNT,
   type DriveTelemetry,
+  type FootPeakTelemetry,
   type ParseTelemetryResult,
   type StatsTelemetry,
   type TelemetryMessage,

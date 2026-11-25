@@ -20,6 +20,11 @@ export default function AppTabs() {
         />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="live">
+        <NativeTabs.Trigger.Label>Live Test</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="wave.3.right" md="bluetooth" />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="explore">
         <NativeTabs.Trigger.Label>Explore</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

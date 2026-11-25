@@ -2,6 +2,29 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
+## Test live PERG collection
+
+The **Live Test** tab uses native Bluetooth. Install a development build on
+the phone. On a Mac with Xcode and a connected iPhone, run `npm ci` and
+`npx expo run:ios --device` from `mobile/`. Expo Go can still open the
+**Import CSV** screen for saved recordings.
+
+1. Power the sensor ESP32 and the Freenove running the phone-relay sketch.
+   Wait for the Freenove dashboard and disconnect nRF Connect if it is open.
+2. Open **Live Test** and tap **Connect to Freenove**. Once the app shows
+   that it is receiving data, tap **Start capture**. Press and release each
+   pad in turn and compare the corresponding live reading with the LCD.
+3. For a peak check, start a session on the LCD and row a few strokes.
+   Compare the held total and both contributions on the phone and monitor.
+4. Tap **Stop and save capture**, then **Share saved capture** to copy the
+   file to Files or to your computer. Check that it contains several
+   `stats` records with changing foot loads and, if you rowed, the expected
+   `foot_peak` values.
+
+The capture is a local `.ndjson` file. Each line contains the phone's receive
+time in epoch milliseconds, the original telemetry line, and its parsed
+fields. The file includes `stats`, `drive`, and `foot_peak` messages.
+
 ## Get started
 
 1. Install dependencies

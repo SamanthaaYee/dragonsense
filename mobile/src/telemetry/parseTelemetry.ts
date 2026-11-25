@@ -23,9 +23,8 @@ function parseFiniteNumber(raw: string): number | null {
 }
 
 function parseStats(fields: string[]): ParseTelemetryResult {
-  // stats + 8 values
-  if (fields.length !== 9) {
-    return fail(`stats expects 9 fields, got ${fields.length}`);
+  if (fields.length !== 9 && fields.length !== 13) {
+    return fail(`stats expects 9 or 13 fields, got ${fields.length}`);
   }
 
   const runningRaw = fields[1];
@@ -71,7 +70,32 @@ function parseStats(fields: string[]): ParseTelemetryResult {
     spm,
     balance,
   };
+  if (fields.length === 13) {
+    const leftBottom = parseFiniteNumber(fields[9]);
+    const leftTop = parseFiniteNumber(fields[10]);
+    const rightTop = parseFiniteNumber(fields[11]);
+    const rightBottom = parseFiniteNumber(fields[12]);
+    if (
+      leftBottom === null || leftBottom < 0 ||
+      leftTop === null || leftTop < 0 ||
+      rightTop === null || rightTop < 0 ||
+      rightBottom === null || rightBottom < 0
+    ) {
+      return fail('stats foot loads must be finite and non-negative');
+    }
+    message.footLoads = { leftBottom, leftTop, rightTop, rightBottom };
+  }
   return { ok: true, message };
+}
+
+function parseFootPeak(fields: string[]): ParseTelemetryResult {
+  if (fields.length !== 3) return fail('foot_peak expects left and right loads');
+  const left = parseFiniteNumber(fields[1]);
+  const right = parseFiniteNumber(fields[2]);
+  if (left === null || left < 0 || right === null || right < 0 || !Number.isFinite(left + right)) {
+    return fail('foot_peak loads must be finite and non-negative');
+  }
+  return { ok: true, message: { type: 'foot_peak', loads: { left, right } } };
 }
 
 function hexValue(char: string): number | null {
@@ -114,6 +138,7 @@ function parseDrive(payload: string): ParseTelemetryResult {
 export function parseTelemetry(line: string): ParseTelemetryResult {
   const trimmed = line.trim();
   if (trimmed.length === 0) return fail('empty message');
+  if (trimmed === 'foot_peak') return { ok: true, message: { type: 'foot_peak', loads: null } };
 
   const comma = trimmed.indexOf(',');
   if (comma < 0) return fail('unsupported message');
@@ -129,5 +154,6 @@ export function parseTelemetry(line: string): ParseTelemetryResult {
     // Do not split the hex payload on commas; the format is drive,<hex>.
     return parseDrive(rest);
   }
+  if (kind === 'foot_peak') return parseFootPeak(trimmed.split(','));
   return fail(`unsupported message type: ${kind}`);
 }
