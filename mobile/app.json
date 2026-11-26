@@ -8,7 +8,8 @@
     "scheme": "dragonsensemobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.samantha.dragonsense"
     },
     "android": {
       "adaptiveIcon": {
@@ -34,7 +35,16 @@
         }
       ],
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-dev-client",
+      [
+        "@sfourdrinier/react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "neverForLocation": true,
+          "bluetoothAlwaysPermission": "DragonSense connects to the PERG display over Bluetooth to receive live workout telemetry."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
